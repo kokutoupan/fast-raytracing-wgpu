@@ -6,8 +6,9 @@ edition = "2024"
 [dependencies]
 # ウィンドウ作成とイベント管理
 winit = "0.30"
-wgpu = "28.0.0"
+wgpu = { version = "28.0.0" }
 pollster = "0.4.0"
 # ログ出力用（デバッグに必須）
 env_logger = "0.11"
 log = "0.4"
+bytemuck = { version = "1.24", features = ["derive"] }

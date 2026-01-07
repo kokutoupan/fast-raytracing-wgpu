@@ -6,6 +6,8 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 pub struct CameraUniform {
     pub view_inverse: [[f32; 4]; 4],
     pub proj_inverse: [[f32; 4]; 4],
+    pub frame_count: u32,
+    pub _padding: [u32; 3], // 16バイトアライメントのためのパディング
 }
 
 pub struct CameraController {
@@ -152,7 +154,7 @@ impl CameraController {
         }
     }
 
-    pub fn build_uniform(&self, aspect: f32) -> CameraUniform {
+    pub fn build_uniform(&self, aspect: f32, frame_count: u32) -> CameraUniform {
         let (sin_y, cos_y) = self.yaw.sin_cos();
         let (sin_p, cos_p) = self.pitch.sin_cos();
         let forward = Vec3::new(cos_p * cos_y, sin_p, cos_p * sin_y).normalize();
@@ -163,6 +165,8 @@ impl CameraController {
         CameraUniform {
             view_inverse: view.inverse().to_cols_array_2d(),
             proj_inverse: proj.inverse().to_cols_array_2d(),
+            frame_count,
+            _padding: [0; 3],
         }
     }
 }

@@ -80,9 +80,19 @@ pub struct State {
     pub blit_pipeline: wgpu::RenderPipeline,
     pub blit_bind_group: wgpu::BindGroup,
 
+    // Resize用のレイアウト保持
+    pub compute_bind_group_layout: wgpu::BindGroupLayout,
+    pub blit_bind_group_layout: wgpu::BindGroupLayout,
+    pub material_buffer: wgpu::Buffer, // マテリアルバッファも再利用のために保持
+    pub sampler: wgpu::Sampler,        // サンプラーも保持
+
     // カメラ関連
     pub camera_buffer: wgpu::Buffer,
     pub camera_controller: CameraController,
+
+    // アキュムレーション関連
+    pub accumulation_buffer: wgpu::Buffer,
+    pub frame_count: u32,
 }
 
 impl State {
@@ -254,7 +264,7 @@ impl State {
         // 3. カメラ初期化
         let camera_controller = CameraController::new();
         let camera_uniform =
-            camera_controller.build_uniform(config.width as f32 / config.height as f32);
+            camera_controller.build_uniform(config.width as f32 / config.height as f32, 0);
 
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Camera Buffer"),
@@ -263,6 +273,14 @@ impl State {
         });
 
         // 4. パイプライン (Binding 2 にカメラを追加)
+        // アキュムレーションバッファ作成 (Binding 4)
+        let accumulation_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Accumulation Buffer"),
+            size: (config.width * config.height * 16) as u64, // vec4<f32> per pixel
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         let storage_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d {
@@ -314,12 +332,22 @@ impl State {
                     },
                     count: None,
                 },
-                // マテリアル用
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // アキュムレーション用
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -362,6 +390,10 @@ impl State {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: material_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: accumulation_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -449,6 +481,92 @@ impl State {
             blit_bind_group,
             camera_buffer,
             camera_controller,
+            accumulation_buffer,
+            frame_count: 0,
+            compute_bind_group_layout: compute_bgl,
+            blit_bind_group_layout: blit_bgl,
+            material_buffer,
+            sampler,
+        }
+    }
+
+    pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
+        if new_size.width > 0 && new_size.height > 0 {
+            self.config.width = new_size.width;
+            self.config.height = new_size.height;
+            self.surface.configure(&self.device, &self.config);
+
+            // アキュムレーションバッファ再作成
+            self.accumulation_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Accumulation Buffer"),
+                size: (self.config.width * self.config.height * 16) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+
+            // ストレージテクスチャ再作成
+            let storage_tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: self.config.width,
+                    height: self.config.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let storage_view = storage_tex.create_view(&Default::default());
+
+            // Compute BindGroup 再作成
+            self.compute_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &self.compute_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::AccelerationStructure(&self.tlas),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&storage_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: self.camera_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: self.material_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: self.accumulation_buffer.as_entire_binding(),
+                    },
+                ],
+            });
+
+            // Blit BindGroup 再作成
+            self.blit_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &self.blit_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&storage_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                ],
+            });
+
+            // リサイズしたらアキュムレーションリセット
+            self.frame_count = 0;
         }
     }
 
@@ -459,10 +577,26 @@ impl State {
 
     // フレームごとの更新処理
     pub fn update(&mut self) {
+        let prev_pos = self.camera_controller.position;
+        let prev_yaw = self.camera_controller.yaw;
+        let prev_pitch = self.camera_controller.pitch;
+
         self.camera_controller.update_camera();
-        let uniform = self
-            .camera_controller
-            .build_uniform(self.config.width as f32 / self.config.height as f32);
+
+        // カメラが動いたらフレームカウントをリセット
+        if self.camera_controller.position != prev_pos
+            || self.camera_controller.yaw != prev_yaw
+            || self.camera_controller.pitch != prev_pitch
+        {
+            self.frame_count = 0;
+        } else {
+            self.frame_count += 1;
+        }
+
+        let uniform = self.camera_controller.build_uniform(
+            self.config.width as f32 / self.config.height as f32,
+            self.frame_count,
+        );
         self.queue
             .write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[uniform]));
     }

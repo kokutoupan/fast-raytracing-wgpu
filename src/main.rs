@@ -1,10 +1,10 @@
-mod state;
+mod camera;
+mod state; // 追加
 use state::State;
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
     event_loop::{ControlFlow, EventLoop},
-    window::Window,
 };
 
 struct App {
@@ -12,24 +12,36 @@ struct App {
 }
 impl ApplicationHandler for App {
     fn resumed(&mut self, el: &winit::event_loop::ActiveEventLoop) {
-        let window = el.create_window(Window::default_attributes()).unwrap();
+        let window = el
+            .create_window(
+                winit::window::Window::default_attributes().with_title("RayQuery Camera"),
+            )
+            .unwrap();
         self.state = Some(pollster::block_on(State::new(window)));
     }
+
     fn window_event(
         &mut self,
         el: &winit::event_loop::ActiveEventLoop,
         _: winit::window::WindowId,
         ev: WindowEvent,
     ) {
-        match ev {
-            WindowEvent::CloseRequested => el.exit(),
-            WindowEvent::RedrawRequested => {
-                if let Some(s) = &mut self.state {
-                    let _ = s.render();
-                    s.window.request_redraw();
+        if let Some(state) = &mut self.state {
+            // 1. 入力を処理
+            state.input(&ev);
+
+            match ev {
+                WindowEvent::CloseRequested => el.exit(),
+                WindowEvent::RedrawRequested => {
+                    // 2. カメラ位置更新 & バッファ転送
+                    state.update();
+
+                    // 3. 描画
+                    let _ = state.render();
+                    state.window.request_redraw(); // 連続描画
                 }
+                _ => (),
             }
-            _ => (),
         }
     }
 }

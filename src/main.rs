@@ -13,6 +13,7 @@ struct App {
     state: Option<State>,
     last_fps_update: Option<Instant>,
     frame_count: u32,
+    last_frame_time: Option<Instant>,
 }
 impl ApplicationHandler for App {
     fn resumed(&mut self, el: &winit::event_loop::ActiveEventLoop) {
@@ -24,6 +25,7 @@ impl ApplicationHandler for App {
         self.state = Some(pollster::block_on(State::new(window)));
         self.last_fps_update = Some(Instant::now());
         self.frame_count = 0;
+        self.last_frame_time = Some(Instant::now());
     }
 
     fn window_event(
@@ -43,7 +45,11 @@ impl ApplicationHandler for App {
                 }
                 WindowEvent::RedrawRequested => {
                     // 2. カメラ位置更新 & バッファ転送
-                    state.update();
+                    let now = Instant::now();
+                    let dt = now - self.last_frame_time.unwrap_or(now);
+                    self.last_frame_time = Some(now);
+
+                    state.update(dt);
 
                     // 3. 描画
                     let _ = state.render();
@@ -80,6 +86,7 @@ fn main() {
             state: None,
             last_fps_update: None,
             frame_count: 0,
+            last_frame_time: None,
         })
         .unwrap();
 }

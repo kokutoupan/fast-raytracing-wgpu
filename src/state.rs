@@ -1,4 +1,4 @@
-use crate::camera::{CameraController, CameraUniform};
+use crate::camera::CameraController;
 use crate::scene;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -378,12 +378,12 @@ impl State {
         self.camera_controller.process_events(event);
     }
 
-    pub fn update(&mut self) {
+    pub fn update(&mut self, dt: std::time::Duration) {
         let prev_pos = self.camera_controller.position;
         let prev_yaw = self.camera_controller.yaw;
         let prev_pitch = self.camera_controller.pitch;
 
-        self.camera_controller.update_camera();
+        self.camera_controller.update_camera(dt);
 
         if self.camera_controller.position != prev_pos
             || self.camera_controller.yaw != prev_yaw

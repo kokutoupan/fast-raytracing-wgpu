@@ -1,4 +1,4 @@
-use glam::{Mat4, Vec3, Vec4};
+use glam::{Mat4, Vec3};
 use winit::keyboard::{KeyCode, PhysicalKey};
 
 #[repr(C)]
@@ -104,9 +104,10 @@ impl CameraController {
         }
     }
 
-    pub fn update_camera(&mut self) {
-        let speed = 0.05 * 1.0 / 60.0;
-        let rotate_speed = 0.03 * 1.0 / 60.0;
+    pub fn update_camera(&mut self, dt: std::time::Duration) {
+        let dt_secs = dt.as_secs_f32();
+        let speed = 2.0 * dt_secs;
+        let rotate_speed = 1.5 * dt_secs;
 
         // 回転の更新
         if self.is_right_turn_pressed {

@@ -653,7 +653,7 @@ impl State {
             }
 
             let now = chrono::Local::now();
-            let filename = format!("screenshot_{}.png", now.format("%Y-%m-%d_%H-%M-%S"));
+            let filename = format!("output/screenshot_{}.png", now.format("%Y-%m-%d_%H-%M-%S"));
             image_buffer.save(&filename).unwrap();
             println!("Saved screenshot: {}", filename);
         }

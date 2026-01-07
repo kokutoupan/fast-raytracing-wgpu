@@ -251,7 +251,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     accumulation[idx] = new_acc;
 
     var final_color = new_acc.rgb / new_acc.w;
-    final_color = pow(final_color, vec3f(1.0 / 2.2)); // Gamma
+    // final_color = pow(final_color, vec3f(1.0 / 2.2)); // Gamma - Commented out to prevent double gamma with sRGB swapchain
 
     textureStore(out_tex, id.xy, vec4f(final_color, 1.0));
 }

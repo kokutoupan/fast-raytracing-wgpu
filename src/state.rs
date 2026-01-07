@@ -31,6 +31,11 @@ pub struct State {
     // アキュムレーション関連
     pub accumulation_buffer: wgpu::Buffer,
     pub frame_count: u32,
+
+    // Screenshot & Control
+    pub storage_texture: wgpu::Texture,
+    pub is_paused: bool,
+    pub screenshot_requested: bool,
 }
 
 impl State {
@@ -89,7 +94,9 @@ impl State {
         let accumulation_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Accumulation Buffer"),
             size: (config.width * config.height * 16) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
 
@@ -339,6 +346,9 @@ impl State {
             blit_bind_group_layout: blit_bgl,
             sampler,
             scene_resources,
+            storage_texture: storage_tex,
+            is_paused: false,
+            screenshot_requested: false,
         }
     }
 
@@ -366,10 +376,14 @@ impl State {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+                usage: wgpu::TextureUsages::STORAGE_BINDING
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
             let storage_view = storage_tex.create_view(&Default::default());
+
+            self.storage_texture = storage_tex;
 
             self.compute_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
@@ -436,6 +450,28 @@ impl State {
 
     pub fn input(&mut self, event: &winit::event::WindowEvent) {
         self.camera_controller.process_events(event);
+        match event {
+            winit::event::WindowEvent::KeyboardInput {
+                event:
+                    winit::event::KeyEvent {
+                        state: winit::event::ElementState::Pressed,
+                        physical_key: winit::keyboard::PhysicalKey::Code(keycode),
+                        ..
+                    },
+                ..
+            } => match keycode {
+                winit::keyboard::KeyCode::KeyJ => {
+                    self.is_paused = !self.is_paused;
+                    println!("Paused: {}", self.is_paused);
+                }
+                winit::keyboard::KeyCode::KeyK => {
+                    self.screenshot_requested = true;
+                    println!("Screenshot requested");
+                }
+                _ => {}
+            },
+            _ => {}
+        }
     }
 
     pub fn update(&mut self, dt: std::time::Duration) {
@@ -466,7 +502,7 @@ impl State {
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&Default::default());
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        {
+        if !self.is_paused {
             let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: None,
                 timestamp_writes: None,
@@ -501,7 +537,125 @@ impl State {
             rpass.draw(0..3, 0..1);
         }
         self.queue.submit(std::iter::once(encoder.finish()));
+
+        // Check for screenshot request
+        if self.screenshot_requested {
+            self.save_screenshot();
+            self.screenshot_requested = false;
+        }
+
         output.present();
         Ok(())
+    }
+
+    fn save_screenshot(&self) {
+        let width = self.config.width;
+        let height = self.config.height;
+
+        let texture_extent = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
+
+        // --- 修正1: バッファのアライメント計算 ---
+        // bytes_per_row は 256 の倍数である必要がある
+        let unpadded_bytes_per_row = width * 4;
+        let align = 256;
+        let padded_bytes_per_row_padding = (align - unpadded_bytes_per_row % align) % align;
+        let padded_bytes_per_row = unpadded_bytes_per_row + padded_bytes_per_row_padding;
+
+        let buffer_size = (padded_bytes_per_row * height) as u64;
+
+        // 1. Create Staging Buffer
+        let staging_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Screenshot Staging Buffer"),
+            size: buffer_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        // 2. Copy Texture to Buffer
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                // v0.24以降の新しい構造体名
+                texture: &self.storage_texture, // ここは rgba8unorm フォーマットである前提です
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging_buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    // ここでアライメント済みのサイズを指定
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            texture_extent,
+        );
+
+        // コマンドを発行
+        let submission_index = self.queue.submit(std::iter::once(encoder.finish()));
+
+        // 3. Map Buffer and Save
+        let buffer_slice = staging_buffer.slice(..);
+        let (sender, receiver) = std::sync::mpsc::channel();
+
+        buffer_slice.map_async(wgpu::MapMode::Read, move |v| {
+            sender.send(v).unwrap();
+        });
+
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .unwrap();
+
+        if receiver.recv().unwrap().is_ok() {
+            let data = buffer_slice.get_mapped_range();
+
+            // パディングを除去して画像データを構築
+            let mut image_data = Vec::with_capacity((width * height * 4) as usize);
+
+            for chunk in data.chunks(padded_bytes_per_row as usize) {
+                // パディングされている行から、有効なデータ部分だけを取り出す
+                image_data.extend_from_slice(&chunk[..unpadded_bytes_per_row as usize]);
+            }
+
+            // ImageBuffer作成
+            let mut image_buffer: image::ImageBuffer<image::Rgba<u8>, Vec<u8>> =
+                image::ImageBuffer::from_raw(width, height, image_data).unwrap();
+
+            drop(data);
+            staging_buffer.unmap();
+
+            image::imageops::flip_vertical_in_place(&mut image_buffer);
+            // --- 追加: ガンマ補正 (Linear -> sRGB) ---
+            // 画面と同じ見た目にするために、手動で明るさを補正します
+            for pixel in image_buffer.pixels_mut() {
+                // 1. [0-255] の整数を [0.0-1.0] の実数に正規化
+                let r_linear = pixel[0] as f32 / 255.0;
+                let g_linear = pixel[1] as f32 / 255.0;
+                let b_linear = pixel[2] as f32 / 255.0;
+
+                // 2. ガンマ補正 (1.0 / 2.2 乗)
+                let r_srgb = r_linear.powf(1.0 / 2.2);
+                let g_srgb = g_linear.powf(1.0 / 2.2);
+                let b_srgb = b_linear.powf(1.0 / 2.2);
+
+                // 3. 再び [0-255] に戻して格納
+                pixel[0] = (r_srgb * 255.0).clamp(0.0, 255.0) as u8;
+                pixel[1] = (g_srgb * 255.0).clamp(0.0, 255.0) as u8;
+                pixel[2] = (b_srgb * 255.0).clamp(0.0, 255.0) as u8;
+                // alpha (pixel[3]) はそのままでOK
+            }
+
+            let now = chrono::Local::now();
+            let filename = format!("screenshot_{}.png", now.format("%Y-%m-%d_%H-%M-%S"));
+            image_buffer.save(&filename).unwrap();
+            println!("Saved screenshot: {}", filename);
+        }
     }
 }

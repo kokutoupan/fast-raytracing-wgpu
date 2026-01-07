@@ -13,12 +13,26 @@ struct Material {
     extra: vec4f, // x: type, y: fuzz, z: ior, w: padding
 }
 
+struct Vertex {
+    pos: vec4f,
+    normal: vec4f,
+}
+
+struct MeshInfo {
+    vertex_offset: u32,
+    index_offset: u32,
+    pad: vec2u,
+}
+
 // --- バインドグループ ---
 @group(0) @binding(0) var tlas: acceleration_structure;
 @group(0) @binding(1) var out_tex: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(2) var<uniform> camera: Camera;
 @group(0) @binding(3) var<storage, read> materials: array<Material>;
 @group(0) @binding(4) var<storage, read_write> accumulation: array<vec4f>;
+@group(0) @binding(5) var<storage, read> vertices: array<Vertex>;
+@group(0) @binding(6) var<storage, read> indices: array<u32>;
+@group(0) @binding(7) var<storage, read> mesh_infos: array<MeshInfo>;
 
 // --- 乱数生成器 (PCG Hash) ---
 var<private> rng_seed: u32;
@@ -67,6 +81,29 @@ struct Ray {
     dir: vec3f,
 }
 
+// --- 頂点法線取得・補間 ---
+fn get_interpolated_normal(mesh_id: u32, primitive_index: u32, barycentric: vec2f) -> vec3f {
+    let mesh_info = mesh_infos[mesh_id];
+    
+    // Index Bufferから3つの頂点インデックスを取得
+    let idx_offset = mesh_info.index_offset + primitive_index * 3u;
+    let i0 = indices[idx_offset + 0u] + mesh_info.vertex_offset;
+    let i1 = indices[idx_offset + 1u] + mesh_info.vertex_offset;
+    let i2 = indices[idx_offset + 2u] + mesh_info.vertex_offset;
+
+    // Vertex Bufferから3つの法線を取得
+    let n0 = vertices[i0].normal.xyz;
+    let n1 = vertices[i1].normal.xyz;
+    let n2 = vertices[i2].normal.xyz;
+
+    // 重心座標補間 (u, v corresponds to i1, i2; w = 1 - u - v corresponds to i0)
+    let u = barycentric.x;
+    let v = barycentric.y;
+    let w = 1.0 - u - v;
+
+    return normalize(n0 * w + n1 * u + n2 * v);
+}
+
 // --- メインの計算関数 ---
 fn ray_color(r_in: Ray) -> vec3f {
     var r = r_in;
@@ -86,63 +123,41 @@ fn ray_color(r_in: Ray) -> vec3f {
             break; // 背景は黒
         }
 
-        // 1. マテリアル & ジオメトリ情報取得
+        // 1. マテリアル & メッシュID取得
         let raw_id = hit.instance_custom_data;
-        let geo_type = raw_id >> 16u; // High 16 bits = Geometry Type
+        let mesh_id = raw_id >> 16u; // High 16 bits = Mesh ID
         let mat_id = raw_id & 0xFFFFu; // Low 16 bits = Material ID
         let mat = materials[mat_id];
 
-        // 2. エミッション加算
-        accumulated_color += mat.emission.rgb * throughput;
-
-        // 3. 法線計算
-        var local_normal = vec3f(0.0, 1.0, 0.0);
-        let tri = hit.primitive_index;
-        
-        // Geometry Type による分岐
-        // 0: Plane (Y-up Quad)
-        // 1: Cube
-        if geo_type == 1u { // Cube
-            // ヒット位置をローカル空間に変換
-            // hit.world_to_object は 4x3 行列。
-            let w2o = hit.world_to_object;
-            let hp = r.origin + r.dir * hit.t;
-            let m0 = vec4f(w2o[0], 0.0);
-            let m1 = vec4f(w2o[1], 0.0);
-            let m2 = vec4f(w2o[2], 0.0);
-            let m3 = vec4f(w2o[3], 1.0);
-            
-            // 行列を手動で構成して乗算 (WGSLの行列コンストラクタは列優先)
-            let transform = mat4x4f(m0, m1, m2, m3);
-            let local_pos = (transform * vec4f(hp, 1.0)).xyz;
-
-            let abs_p = abs(local_pos);
-            if abs_p.x > abs_p.y && abs_p.x > abs_p.z {
-                local_normal = vec3f(sign(local_pos.x), 0.0, 0.0);
-            } else if abs_p.y > abs_p.z {
-                local_normal = vec3f(0.0, sign(local_pos.y), 0.0);
-            } else {
-                local_normal = vec3f(0.0, 0.0, sign(local_pos.z));
-            }
-        }
-        // Plane (0) defaults to (0, 1, 0) which is correct for Y-up quad in local space
+        // 2. 法線計算 (Vertex Embedded Normals) - Moved UP before emission
+        var local_normal = get_interpolated_normal(mesh_id, hit.primitive_index, hit.barycentrics);
 
         // Correct Normal Transformation: Transpose(Inverse(Model)) * Normal
-        // hit.world_to_object is the Inverse(Model) matrix.
-        // In WGSL, vector * matrix multiplication (v * M) is equivalent to M^T * v.
-        // Therefore, local_normal * mat3x3(world_to_object) computes Transpose(WorldToObject) * local_normal.
         let w2o = hit.world_to_object;
         let m_inv = mat3x3f(w2o[0], w2o[1], w2o[2]);
         let world_normal = normalize(local_normal * m_inv);
 
-        // DEBUG: Visualize Normals
-        // return world_normal * 0.5 + 0.5;
+        // 3. エミッション加算 & ライト処理
+        let mat_type = u32(mat.extra.x);
+        let is_front_face = dot(r.dir, world_normal) < 0.0;
+        
+        // Type 3: Pure Light -> Terminate
+        if mat_type == 3u {
+            let no_cull = mat.extra.y > 0.0; // y > 0 means Backface Culling OFF
+            if is_front_face || no_cull {
+                accumulated_color += mat.emission.rgb * throughput;
+            }
+            break;
+        }
+
+        // Standard Emission (Always add, or restrict to front face? Keeping consistent with previous behavior)
+        accumulated_color += mat.emission.rgb * throughput;
 
         // ヒット位置
         let hit_pos = r.origin + r.dir * hit.t;
 
         // 4. マテリアル散乱処理
-        let mat_type = u32(mat.extra.x);
+        // let mat_type = u32(mat.extra.x); // Already defined
         var scatter_dir = vec3f(0.0);
         var absorbed = false;
 

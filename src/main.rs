@@ -1,4 +1,5 @@
 mod camera;
+mod scene;
 mod state; // 追加
 use state::State;
 use std::time::Instant;

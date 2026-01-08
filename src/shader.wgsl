@@ -1,5 +1,10 @@
 enable wgpu_ray_query;
 
+// --- 定数オーバーライド ---
+// デフォルト値を設定 (Rust側から指定がなければこれが使われる)
+override MAX_DEPTH: u32 = 8u;
+override SPP: u32 = 2u;
+
 // --- 構造体定義 ---
 struct Camera {
     view_inverse: array<vec4f, 4>,
@@ -110,7 +115,6 @@ fn ray_color(r_in: Ray) -> vec3f {
     var accumulated_color = vec3f(0.0);
     var throughput = vec3f(1.0);
 
-    let MAX_DEPTH = 8u; // 反射回数を増やす (ガラス用に)
 
     for (var i = 0u; i < MAX_DEPTH; i++) {
         var rq: ray_query;
@@ -226,9 +230,8 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let origin = view_inv[3].xyz;
 
     var pixel_color_linear = vec3f(0.0);
-    let samples_per_frame = 2u; // 高画質化のためサンプル数維持
 
-    for (var s = 0u; s < samples_per_frame; s++) {
+    for (var s = 0u; s < SPP; s++) {
         let jitter = vec2f(rand(), rand());
         let uv_jittered = (vec2f(id.xy) + jitter) / vec2f(size);
         let ndc_jittered = vec2f(uv_jittered.x * 2.0 - 1.0, uv_jittered.y * 2.0 - 1.0);
@@ -247,7 +250,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         current_acc = accumulation[idx];
     }
 
-    let new_acc = current_acc + vec4f(pixel_color_linear, f32(samples_per_frame));
+    let new_acc = current_acc + vec4f(pixel_color_linear, f32(SPP));
     accumulation[idx] = new_acc;
 
     var final_color = new_acc.rgb / new_acc.w;

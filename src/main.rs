@@ -61,9 +61,10 @@ impl ApplicationHandler for App {
                             let fps = self.frame_count as f32 / last_update.elapsed().as_secs_f32();
                             let width = state.config.width;
                             let height = state.config.height;
+                            let diff = state.frame_count; // Frame count in state (accumulation count)
                             state.window.set_title(&format!(
-                                "RayQuery Camera - FPS: {:.1} - Res: {}x{}",
-                                fps, width, height
+                                "RayQuery Camera - FPS: {:.1} - Res: {}x{} - Samples: {}",
+                                fps, width, height, diff
                             ));
                             self.frame_count = 0;
                             self.last_fps_update = Some(Instant::now());

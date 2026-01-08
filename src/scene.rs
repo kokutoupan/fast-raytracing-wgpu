@@ -491,10 +491,12 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     );
 
     // --- Boxes (Cube BLAS, Mesh ID = 1) ---
+    // 0.002ずらして影を落とさないようにする
+
     // Tall Box (Dielectric, Mat 4)
     tlas[6] = mk_instance(
         &cube_blas,
-        Mat4::from_translation(Vec3::new(-0.35, -0.4, -0.3))
+        Mat4::from_translation(Vec3::new(-0.35, -0.4 + 0.002, -0.3))
             * Mat4::from_rotation_y(0.3)
             * Mat4::from_scale(Vec3::new(0.6, 1.2, 0.6)),
         encode_id(1, 4),
@@ -503,7 +505,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     // Short Box (Metal, Mat 5)
     tlas[7] = mk_instance(
         &cube_blas,
-        Mat4::from_translation(Vec3::new(0.4, -0.7, 0.3))
+        Mat4::from_translation(Vec3::new(0.4, -0.7 + 0.002, 0.3))
             * Mat4::from_rotation_y(-0.3)
             * Mat4::from_scale(Vec3::new(0.6, 0.6, 0.6)),
         encode_id(1, 7),

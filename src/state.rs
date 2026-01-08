@@ -138,6 +138,10 @@ impl State {
         });
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
+
+        // --- 定数の設定 ---
+        let constants = [("MAX_DEPTH", 8.0), ("SPP", 2.0)];
+
         let blit_shader = device.create_shader_module(wgpu::include_wgsl!("blit.wgsl"));
 
         let compute_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -238,7 +242,10 @@ impl State {
             ),
             module: &shader,
             entry_point: Some("main"),
-            compilation_options: Default::default(),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: &constants,
+                ..Default::default()
+            },
             cache: None,
         });
 

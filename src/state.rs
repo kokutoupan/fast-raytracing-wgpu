@@ -36,6 +36,10 @@ pub struct State {
     pub storage_texture: wgpu::Texture,
     pub is_paused: bool,
     pub screenshot_requested: bool,
+
+    // スクリーンショット用
+    pub screenshot_buffer: wgpu::Buffer,
+    pub screenshot_padded_bytes_per_row: u32,
 }
 
 impl State {
@@ -67,13 +71,14 @@ impl State {
             })
             .await
             .unwrap();
-        let config = surface
+        let mut config = surface
             .get_default_config(
                 &adapter,
                 window.inner_size().width,
                 window.inner_size().height,
             )
             .unwrap();
+        config.usage |= wgpu::TextureUsages::COPY_SRC;
         surface.configure(&device, &config);
 
         // 2. シーン構築
@@ -94,9 +99,7 @@ impl State {
         let accumulation_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Accumulation Buffer"),
             size: (config.width * config.height * 16) as u64,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
@@ -115,6 +118,24 @@ impl State {
             view_formats: &[],
         });
         let storage_view = storage_tex.create_view(&Default::default());
+
+        // --- 追加: スクリーンショット用バッファの事前確保 ---
+        let width = config.width;
+        let height = config.height;
+
+        let unpadded_bytes_per_row = width * 4;
+        let align = 256;
+        let padding = (align - unpadded_bytes_per_row % align) % align;
+        let padded_bytes_per_row = unpadded_bytes_per_row + padding;
+
+        let screenshot_padded_bytes_per_row = padded_bytes_per_row;
+
+        let screenshot_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Screenshot Buffer"),
+            size: (padded_bytes_per_row * height) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
         let blit_shader = device.create_shader_module(wgpu::include_wgsl!("blit.wgsl"));
@@ -349,6 +370,8 @@ impl State {
             storage_texture: storage_tex,
             is_paused: false,
             screenshot_requested: false,
+            screenshot_buffer,
+            screenshot_padded_bytes_per_row,
         }
     }
 
@@ -376,14 +399,27 @@ impl State {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::STORAGE_BINDING
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC,
+                usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
             let storage_view = storage_tex.create_view(&Default::default());
 
             self.storage_texture = storage_tex;
+
+            // --- 追加: スクリーンショット用バッファの再確保 ---
+            let unpadded_bytes_per_row = self.config.width * 4;
+            let align = 256;
+            let padding = (align - unpadded_bytes_per_row % align) % align;
+            let padded_bytes_per_row = unpadded_bytes_per_row + padding;
+
+            self.screenshot_padded_bytes_per_row = padded_bytes_per_row;
+
+            self.screenshot_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Screenshot Buffer"),
+                size: (padded_bytes_per_row * self.config.height) as u64,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
 
             self.compute_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
@@ -540,7 +576,7 @@ impl State {
 
         // Check for screenshot request
         if self.screenshot_requested {
-            self.save_screenshot();
+            self.save_screenshot(&output.texture);
             self.screenshot_requested = false;
         }
 
@@ -548,114 +584,105 @@ impl State {
         Ok(())
     }
 
-    fn save_screenshot(&self) {
+    // src/state.rs の State impl内
+
+    fn save_screenshot(&self, src_texture: &wgpu::Texture) {
+        let saving_start = chrono::Local::now(); // 計測開始
+
         let width = self.config.width;
         let height = self.config.height;
+        let padded_bytes_per_row = self.screenshot_padded_bytes_per_row;
 
-        let texture_extent = wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        };
-
-        // --- 修正1: バッファのアライメント計算 ---
-        // bytes_per_row は 256 の倍数である必要がある
-        let unpadded_bytes_per_row = width * 4;
-        let align = 256;
-        let padded_bytes_per_row_padding = (align - unpadded_bytes_per_row % align) % align;
-        let padded_bytes_per_row = unpadded_bytes_per_row + padded_bytes_per_row_padding;
-
-        let buffer_size = (padded_bytes_per_row * height) as u64;
-
-        // 1. Create Staging Buffer
-        let staging_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Screenshot Staging Buffer"),
-            size: buffer_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
-        // 2. Copy Texture to Buffer
+        // 1. コピーコマンドの発行
         let mut encoder = self.device.create_command_encoder(&Default::default());
-
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                // v0.24以降の新しい構造体名
-                texture: &self.storage_texture, // ここは rgba8unorm フォーマットである前提です
+                texture: src_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyBufferInfo {
-                buffer: &staging_buffer,
+                buffer: &self.screenshot_buffer,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    // ここでアライメント済みのサイズを指定
                     bytes_per_row: Some(padded_bytes_per_row),
                     rows_per_image: Some(height),
                 },
             },
-            texture_extent,
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
         );
+        self.queue.submit(std::iter::once(encoder.finish()));
 
-        // コマンドを発行
-        let submission_index = self.queue.submit(std::iter::once(encoder.finish()));
-
-        // 3. Map Buffer and Save
-        let buffer_slice = staging_buffer.slice(..);
+        // 2. マップと待機
+        let buffer_slice = self.screenshot_buffer.slice(..);
         let (sender, receiver) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
 
-        buffer_slice.map_async(wgpu::MapMode::Read, move |v| {
-            sender.send(v).unwrap();
-        });
-
+        // ここでGPU完了待ち（これが一番長いが避けられない）
         self.device
             .poll(wgpu::PollType::wait_indefinitely())
             .unwrap();
 
         if receiver.recv().unwrap().is_ok() {
+            // 3. データの吸い出し (ここを最速にする)
             let data = buffer_slice.get_mapped_range();
 
-            // パディングを除去して画像データを構築
-            let mut image_data = Vec::with_capacity((width * height * 4) as usize);
-
-            for chunk in data.chunks(padded_bytes_per_row as usize) {
-                // パディングされている行から、有効なデータ部分だけを取り出す
-                image_data.extend_from_slice(&chunk[..unpadded_bytes_per_row as usize]);
-            }
-
-            // ImageBuffer作成
-            let mut image_buffer: image::ImageBuffer<image::Rgba<u8>, Vec<u8>> =
-                image::ImageBuffer::from_raw(width, height, image_data).unwrap();
+            let raw_data = data.to_vec();
 
             drop(data);
-            staging_buffer.unmap();
+            self.screenshot_buffer.unmap();
 
-            image::imageops::flip_vertical_in_place(&mut image_buffer);
-            // --- 追加: ガンマ補正 (Linear -> sRGB) ---
-            // 画面と同じ見た目にするために、手動で明るさを補正します
-            for pixel in image_buffer.pixels_mut() {
-                // 1. [0-255] の整数を [0.0-1.0] の実数に正規化
-                let r_linear = pixel[0] as f32 / 255.0;
-                let g_linear = pixel[1] as f32 / 255.0;
-                let b_linear = pixel[2] as f32 / 255.0;
+            // 4. 重い処理はすべて別スレッドへ
+            std::thread::spawn(move || {
+                let unpadded_bytes_per_row = (width * 4) as usize;
 
-                // 2. ガンマ補正 (1.0 / 2.2 乗)
-                let r_srgb = r_linear.powf(1.0 / 2.2);
-                let g_srgb = g_linear.powf(1.0 / 2.2);
-                let b_srgb = b_linear.powf(1.0 / 2.2);
+                // パディング除去
+                let mut image_data = Vec::with_capacity((width * height * 4) as usize);
+                for chunk in raw_data.chunks(padded_bytes_per_row as usize) {
+                    image_data.extend_from_slice(&chunk[..unpadded_bytes_per_row]);
+                }
 
-                // 3. 再び [0-255] に戻して格納
-                pixel[0] = (r_srgb * 255.0).clamp(0.0, 255.0) as u8;
-                pixel[1] = (g_srgb * 255.0).clamp(0.0, 255.0) as u8;
-                pixel[2] = (b_srgb * 255.0).clamp(0.0, 255.0) as u8;
-                // alpha (pixel[3]) はそのままでOK
-            }
+                // ImageBuffer作成
+                match image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(
+                    width, height, image_data,
+                ) {
+                    Some(mut image_buffer) => {
+                        // BGRA -> RGBA 変換
+                        for pixel in image_buffer.pixels_mut() {
+                            let tmp = pixel[0];
+                            pixel[0] = pixel[2];
+                            pixel[2] = tmp;
+                            pixel[3] = 255; // Alpha固定
+                        }
 
-            let now = chrono::Local::now();
-            let filename = format!("output/screenshot_{}.png", now.format("%Y-%m-%d_%H-%M-%S"));
-            image_buffer.save(&filename).unwrap();
-            println!("Saved screenshot: {}", filename);
+                        // 保存
+                        let now = chrono::Local::now();
+                        let filename =
+                            format!("output/screenshot_{}.png", now.format("%Y-%m-%d_%H-%M-%S"));
+
+                        // ディレクトリ確認
+                        let _ = std::fs::create_dir_all("output");
+
+                        match image_buffer.save(&filename) {
+                            Ok(_) => println!("Saved screenshot (BG): {}", filename),
+                            Err(e) => eprintln!("Failed to save: {}", e),
+                        }
+                    }
+                    None => eprintln!("Failed to create image buffer"),
+                }
+            });
         }
+
+        // メインスレッドの仕事はここまで！
+        // 計測終了
+        println!(
+            "Main thread freeze time: {}ms",
+            chrono::Local::now().timestamp_millis() - saving_start.timestamp_millis()
+        );
     }
 }

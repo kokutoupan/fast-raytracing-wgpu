@@ -1,0 +1,9 @@
+# このファイルは run.sh によって自動生成されました。
+# プロジェクト固有の環境変数を定義します。
+
+[env]
+# ビルド時に .pc ファイルを探すパス
+PKG_CONFIG_PATH = { value = "/home/kokutou/WorkSpace/Rust/fast-raytracing-wgpu/deps/oidn-2.3.3.x86_64.linux/lib/pkgconfig", force = true }
+
+# 実行時に .so ライブラリを探すパス
+LD_LIBRARY_PATH = { value = "/home/kokutou/WorkSpace/Rust/fast-raytracing-wgpu/deps/oidn-2.3.3.x86_64.linux/lib", force = true }

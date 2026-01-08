@@ -1,2 +1,5 @@
 target
 output
+
+# 依存ライブラリ (OIDNなど)
+/deps

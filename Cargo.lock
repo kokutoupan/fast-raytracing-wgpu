@@ -724,7 +724,9 @@ dependencies = [
  "glam",
  "image",
  "log",
+ "oidn",
  "pollster",
+ "rayon",
  "wgpu",
  "winit",
 ]
@@ -1664,6 +1666,16 @@ dependencies = [
  "objc2",
  "objc2-core-location",
  "objc2-foundation",
+]
+
+[[package]]
+name = "oidn"
+version = "2.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12331c17ab2164afb05093c59e3eaf315466fe8551b7024327d579874b4ffb8f"
+dependencies = [
+ "num_enum",
+ "pkg-config",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 use crate::camera::CameraController;
 use crate::scene;
-use crate::screenshot::{ScreenshotTask, save_image};
+use crate::screenshot::ScreenshotTask;
 use crate::wgpu_utils::*;
 use std::sync::Arc;
 
@@ -50,9 +50,11 @@ impl State {
         let (screenshot_sender, screenshot_receiver) = std::sync::mpsc::channel::<ScreenshotTask>();
 
         // スクリーンショット保存用スレッド
+        // スクリーンショット保存用スレッド
         std::thread::spawn(move || {
+            let mut saver = crate::screenshot::ScreenshotSaver::new();
             while let Ok(task) = screenshot_receiver.recv() {
-                save_image(task);
+                saver.process_and_save(task);
             }
         });
 

@@ -20,7 +20,7 @@ rayon = "1.11.0"
 
 [features]
 # デフォルトでAIを有効にするならここに追加。無効にするなら空にする。
-default = ["ai-denoise"] 
+default = [] 
 
 # "ai-denoise" フラグが有効なときだけ、oidnクレートを有効化する
 ai-denoise = ["dep:oidn"]

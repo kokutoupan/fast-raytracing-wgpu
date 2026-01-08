@@ -14,7 +14,11 @@ pub struct ScreenshotTask {
 pub struct ScreenshotSaver {
     // Buffers for reuse
     image_data: Vec<u8>,
+
+    #[cfg(feature = "ai-denoise")]
     input_rgb: Vec<f32>,
+
+    #[cfg(feature = "ai-denoise")]
     output_rgb: Vec<f32>,
 
     #[cfg(feature = "ai-denoise")]
@@ -28,7 +32,9 @@ impl ScreenshotSaver {
 
         Self {
             image_data: Vec::new(),
+            #[cfg(feature = "ai-denoise")]
             input_rgb: Vec::new(),
+            #[cfg(feature = "ai-denoise")]
             output_rgb: Vec::new(),
             #[cfg(feature = "ai-denoise")]
             device,

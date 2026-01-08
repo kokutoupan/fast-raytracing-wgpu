@@ -74,5 +74,3 @@ EOF
 
 # --- 4. 実行 ---
 echo "Setup complete. You can now use 'cargo run' directly."
-echo "Running cargo run now..."
-cargo run --release "$@"

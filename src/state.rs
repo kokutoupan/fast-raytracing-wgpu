@@ -89,53 +89,32 @@ impl State {
         let camera_uniform =
             camera_controller.build_uniform(config.width as f32 / config.height as f32, 0);
 
-        let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Camera Buffer"),
-            contents: bytemuck::cast_slice(&[camera_uniform]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let camera_buffer = create_buffer_init(
+            &device,
+            "Camera Buffer",
+            &[camera_uniform],
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        );
 
         // 4. パイプライン
-        let accumulation_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Accumulation Buffer"),
-            size: (config.width * config.height * 16) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let accumulation_buffer = create_buffer(
+            &device,
+            "Accumulation Buffer",
+            (config.width * config.height * 16) as u64,
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        );
 
-        let storage_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: None,
-            size: wgpu::Extent3d {
-                width: config.width,
-                height: config.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
+        let storage_tex = create_storage_texture(&device, &config);
         let storage_view = storage_tex.create_view(&Default::default());
 
         // --- 追加: スクリーンショット用バッファの事前確保 ---
-        let width = config.width;
-        let height = config.height;
-
-        let unpadded_bytes_per_row = width * 4;
-        let align = 256;
-        let padding = (align - unpadded_bytes_per_row % align) % align;
-        let padded_bytes_per_row = unpadded_bytes_per_row + padding;
-
-        let screenshot_padded_bytes_per_row = padded_bytes_per_row;
-
-        let screenshot_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Screenshot Buffer"),
-            size: (padded_bytes_per_row * height) as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let screenshot_padded_bytes_per_row = get_padded_bytes_per_row(config.width);
+        let screenshot_buffer = create_buffer(
+            &device,
+            "Screenshot Buffer",
+            (screenshot_padded_bytes_per_row * config.height) as u64,
+            wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        );
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
 
@@ -249,44 +228,14 @@ impl State {
             cache: None,
         });
 
-        let compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &compute_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::AccelerationStructure(&scene_resources.tlas),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&storage_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: camera_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: scene_resources.material_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: accumulation_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: scene_resources.global_vertex_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: scene_resources.global_index_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: scene_resources.mesh_info_buffer.as_entire_binding(),
-                },
-            ],
-        });
+        let compute_bind_group = create_compute_bind_group(
+            &device,
+            &compute_bgl,
+            &scene_resources,
+            &storage_view,
+            &camera_buffer,
+            &accumulation_buffer,
+        );
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
         let blit_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -341,20 +290,7 @@ impl State {
             multiview_mask: None,
             cache: None,
         });
-        let blit_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &blit_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&storage_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        });
+        let blit_bind_group = create_blit_bind_group(&device, &blit_bgl, &storage_view, &sampler);
 
         Self {
             device,
@@ -388,104 +324,42 @@ impl State {
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
 
-            self.accumulation_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Accumulation Buffer"),
-                size: (self.config.width * self.config.height * 16) as u64,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
+            self.accumulation_buffer = create_buffer(
+                &self.device,
+                "Accumulation Buffer",
+                (self.config.width * self.config.height * 16) as u64,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            );
 
-            let storage_tex = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: None,
-                size: wgpu::Extent3d {
-                    width: self.config.width,
-                    height: self.config.height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
+            let storage_tex = create_storage_texture(&self.device, &self.config);
             let storage_view = storage_tex.create_view(&Default::default());
 
             self.storage_texture = storage_tex;
 
             // --- 追加: スクリーンショット用バッファの再確保 ---
-            let unpadded_bytes_per_row = self.config.width * 4;
-            let align = 256;
-            let padding = (align - unpadded_bytes_per_row % align) % align;
-            let padded_bytes_per_row = unpadded_bytes_per_row + padding;
+            self.screenshot_padded_bytes_per_row = get_padded_bytes_per_row(self.config.width);
+            self.screenshot_buffer = create_buffer(
+                &self.device,
+                "Screenshot Buffer",
+                (self.screenshot_padded_bytes_per_row * self.config.height) as u64,
+                wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            );
 
-            self.screenshot_padded_bytes_per_row = padded_bytes_per_row;
+            self.compute_bind_group = create_compute_bind_group(
+                &self.device,
+                &self.compute_bind_group_layout,
+                &self.scene_resources,
+                &storage_view,
+                &self.camera_buffer,
+                &self.accumulation_buffer,
+            );
 
-            self.screenshot_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Screenshot Buffer"),
-                size: (padded_bytes_per_row * self.config.height) as u64,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
-
-            self.compute_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: None,
-                layout: &self.compute_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::AccelerationStructure(
-                            &self.scene_resources.tlas,
-                        ),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&storage_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: self.camera_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: self.scene_resources.material_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: self.accumulation_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 5,
-                        resource: self
-                            .scene_resources
-                            .global_vertex_buffer
-                            .as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 6,
-                        resource: self.scene_resources.global_index_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 7,
-                        resource: self.scene_resources.mesh_info_buffer.as_entire_binding(),
-                    },
-                ],
-            });
-
-            self.blit_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: None,
-                layout: &self.blit_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&storage_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
-                ],
-            });
+            self.blit_bind_group = create_blit_bind_group(
+                &self.device,
+                &self.blit_bind_group_layout,
+                &storage_view,
+                &self.sampler,
+            );
 
             self.frame_count = 0;
         }
@@ -692,4 +566,128 @@ impl State {
             chrono::Local::now().timestamp_millis() - saving_start.timestamp_millis()
         );
     }
+}
+
+fn create_buffer(
+    device: &wgpu::Device,
+    label: &str,
+    size: u64,
+    usage: wgpu::BufferUsages,
+) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size,
+        usage,
+        mapped_at_creation: false,
+    })
+}
+
+fn create_buffer_init<T: bytemuck::Pod>(
+    device: &wgpu::Device,
+    label: &str,
+    data: &[T],
+    usage: wgpu::BufferUsages,
+) -> wgpu::Buffer {
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(label),
+        contents: bytemuck::cast_slice(data),
+        usage,
+    })
+}
+
+fn create_storage_texture(
+    device: &wgpu::Device,
+    config: &wgpu::SurfaceConfiguration,
+) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Storage Texture"),
+        size: wgpu::Extent3d {
+            width: config.width,
+            height: config.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    })
+}
+
+fn get_padded_bytes_per_row(width: u32) -> u32 {
+    let unpadded_bytes_per_row = width * 4;
+    let align = 256;
+    let padding = (align - unpadded_bytes_per_row % align) % align;
+    unpadded_bytes_per_row + padding
+}
+
+fn create_compute_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    scene_resources: &scene::SceneResources,
+    storage_view: &wgpu::TextureView,
+    camera_buffer: &wgpu::Buffer,
+    accumulation_buffer: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::AccelerationStructure(&scene_resources.tlas),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(storage_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: camera_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: scene_resources.material_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: accumulation_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: scene_resources.global_vertex_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: scene_resources.global_index_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: scene_resources.mesh_info_buffer.as_entire_binding(),
+            },
+        ],
+    })
+}
+
+fn create_blit_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    storage_view: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(storage_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    })
 }

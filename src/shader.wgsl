@@ -143,7 +143,8 @@ fn ray_color(r_in: Ray) -> vec3f {
 
         // 3. エミッション加算 & ライト処理
         let mat_type = u32(mat.extra.x);
-        let is_front_face = dot(r.dir, world_normal) < 0.0;
+        let is_front_face = hit.front_face;
+        let ffnormal = select(-world_normal, world_normal, is_front_face);
         
         // Type 3: Pure Light -> Terminate
         if mat_type == 3u {
@@ -154,52 +155,50 @@ fn ray_color(r_in: Ray) -> vec3f {
             break;
         }
 
-        // Standard Emission (Always add, or restrict to front face? Keeping consistent with previous behavior)
+        // Standard Emission (Always add)
         accumulated_color += mat.emission.rgb * throughput;
 
         // ヒット位置
         let hit_pos = r.origin + r.dir * hit.t;
 
         // 4. マテリアル散乱処理
-        // let mat_type = u32(mat.extra.x); // Already defined
         var scatter_dir = vec3f(0.0);
         var absorbed = false;
 
         if mat_type == 1u { // Metal
-            let reflected = reflect(r.dir, world_normal);
+            let reflected = reflect(r.dir, ffnormal);
             let fuzz = mat.extra.y;
             scatter_dir = reflected + random_unit_vector() * fuzz;
-            // 法線と同じ向きなら有効
-            if dot(scatter_dir, world_normal) < -0.0001 {
+            
+            // 反射方向が法線（表面側）を向いていなければ吸収 (法線と同じ向きなら有効)
+            if dot(scatter_dir, ffnormal) <= 0.0 {
                 absorbed = true;
             }
             throughput *= mat.color.rgb; // 金属色
         } else if mat_type == 2u { // Dielectric (Glass)
             let ir = mat.extra.z; // IOR
-            let front_face = dot(r.dir, world_normal) < 0.0;
-            let normal = select(-world_normal, world_normal, front_face);
-            let refraction_ratio = select(ir, 1.0 / ir, front_face);
+            let refraction_ratio = select(ir, 1.0 / ir, is_front_face);
 
             let unit_dir = normalize(r.dir);
-            let cos_theta = min(dot(-unit_dir, normal), 1.0);
+            let cos_theta = min(dot(-unit_dir, ffnormal), 1.0);
             let sin_theta = sqrt(1.0 - cos_theta * cos_theta);
 
             let cannot_refract = refraction_ratio * sin_theta > 1.0;
             var direction = vec3f(0.0);
 
             if cannot_refract || reflectance(cos_theta, refraction_ratio) > rand() {
-                direction = reflect(unit_dir, normal);
+                direction = reflect(unit_dir, ffnormal);
             } else {
-                direction = refract(unit_dir, normal, refraction_ratio);
+                direction = refract(unit_dir, ffnormal, refraction_ratio);
             }
 
             scatter_dir = direction;
             throughput *= mat.color.rgb; // ガラスも色付き可能
         } else { // Lambertian (Default)
-            scatter_dir = world_normal + random_unit_vector();
+            scatter_dir = ffnormal + random_unit_vector();
             // 縮退防止
             if length(scatter_dir) < 0.001 {
-                scatter_dir = world_normal;
+                scatter_dir = ffnormal;
             }
             scatter_dir = normalize(scatter_dir);
             throughput *= mat.color.rgb;

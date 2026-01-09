@@ -1,4 +1,5 @@
 use glam::{Mat4, Vec3};
+use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 
 // GPUに送るマテリアルデータ (48バイト)
@@ -209,6 +210,7 @@ fn create_cube_blas(
 // --- ヘルパー関数: 球体(Sphere)のBLASを作成 (UV Sphere) ---
 fn create_sphere_blas(
     device: &wgpu::Device,
+    subdivisions: u32,
 ) -> (
     wgpu::Blas,
     Vec<Vertex>,
@@ -218,53 +220,87 @@ fn create_sphere_blas(
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
 
-    let segments_u = 32;
-    let segments_v = 16;
-    let radius = 0.5;
+    // 1. 正二十面体の基本定数 (黄金比 phi)
+    let t = (1.0 + 5.0f32.sqrt()) / 2.0;
 
-    for i in 0..=segments_v {
-        let v = i as f32 / segments_v as f32;
-        let phi = v * std::f32::consts::PI; // 0 to PI
+    // 初期頂点 (半径を 0.5 に調整)
+    let mut add_vertex = |p: [f32; 3]| {
+        let length = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
+        let n = [p[0] / length, p[1] / length, p[2] / length];
+        let pos = [n[0] * 0.5, n[1] * 0.5, n[2] * 0.5, 1.0];
+        vertices.push(Vertex {
+            pos,
+            normal: [n[0], n[1], n[2], 0.0],
+        });
+        vertices.len() as u32 - 1
+    };
 
-        for j in 0..=segments_u {
-            let u = j as f32 / segments_u as f32;
-            let theta = u * 2.0 * std::f32::consts::PI; // 0 to 2PI
+    // 初期12頂点
+    add_vertex([-1.0, t, 0.0]);
+    add_vertex([1.0, t, 0.0]);
+    add_vertex([-1.0, -t, 0.0]);
+    add_vertex([1.0, -t, 0.0]);
+    add_vertex([0.0, -1.0, t]);
+    add_vertex([0.0, 1.0, t]);
+    add_vertex([0.0, -1.0, -t]);
+    add_vertex([0.0, 1.0, -t]);
+    add_vertex([t, 0.0, -1.0]);
+    add_vertex([t, 0.0, 1.0]);
+    add_vertex([-t, 0.0, -1.0]);
+    add_vertex([-t, 0.0, 1.0]);
 
-            let x = radius * phi.sin() * theta.cos();
-            let y = radius * phi.cos();
-            let z = radius * phi.sin() * theta.sin();
+    // 初期20面 (反時計回り CCW)
+    let mut faces = vec![
+        [0, 11, 5],
+        [0, 5, 1],
+        [0, 1, 7],
+        [0, 7, 10],
+        [0, 10, 11],
+        [1, 5, 9],
+        [5, 11, 4],
+        [11, 10, 2],
+        [10, 7, 6],
+        [7, 1, 8],
+        [3, 9, 4],
+        [3, 4, 2],
+        [3, 2, 6],
+        [3, 6, 8],
+        [3, 8, 9],
+        [4, 9, 5],
+        [2, 4, 11],
+        [6, 2, 10],
+        [8, 6, 7],
+        [9, 8, 1],
+    ];
 
-            // 法線は中心からのベクトルを正規化 (中心(0,0,0)なので位置ベクトルそのもの)
-            // 半径0.5で割る必要はないが、正規化はしておく
-            let l = (x * x + y * y + z * z).sqrt();
-            let nx = x / l;
-            let ny = y / l;
-            let nz = z / l;
+    // 2. 分割処理
+    let mut midpoint_cache = HashMap::new();
+    for _ in 0..subdivisions {
+        let mut new_faces = Vec::new();
+        for tri in faces {
+            let v1 = tri[0];
+            let v2 = tri[1];
+            let v3 = tri[2];
 
-            vertices.push(Vertex {
-                pos: [x, y, z, 1.0],
-                normal: [nx, ny, nz, 0.0],
-            });
+            let a = get_midpoint(v1, v2, &mut vertices, &mut midpoint_cache);
+            let b = get_midpoint(v2, v3, &mut vertices, &mut midpoint_cache);
+            let c = get_midpoint(v3, v1, &mut vertices, &mut midpoint_cache);
+
+            new_faces.push([v1, a, c]);
+            new_faces.push([v2, b, a]);
+            new_faces.push([v3, c, b]);
+            new_faces.push([a, b, c]);
         }
+        faces = new_faces;
     }
 
-    for i in 0..segments_v {
-        for j in 0..segments_u {
-            let first = (i * (segments_u + 1)) + j;
-            let second = first + segments_u + 1;
-
-            indices.push(first);
-            indices.push(second);
-            indices.push(first + 1);
-
-            indices.push(second);
-            indices.push(second + 1);
-            indices.push(first + 1);
-        }
+    for tri in faces {
+        indices.extend_from_slice(&tri);
     }
 
+    // 3. wgpu BLAS 構築
     let blas_geo_size = wgpu::BlasTriangleGeometrySizeDescriptor {
-        vertex_format: wgpu::VertexFormat::Float32x3,
+        vertex_format: wgpu::VertexFormat::Float32x3, // Vertex構造体のposに合わせる
         vertex_count: vertices.len() as u32,
         index_format: Some(wgpu::IndexFormat::Uint32),
         index_count: Some(indices.len() as u32),
@@ -273,7 +309,7 @@ fn create_sphere_blas(
 
     let blas = device.create_blas(
         &wgpu::CreateBlasDescriptor {
-            label: Some("Sphere BLAS"),
+            label: Some("Ico Sphere BLAS"),
             flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE,
             update_mode: wgpu::AccelerationStructureUpdateMode::Build,
         },
@@ -285,11 +321,45 @@ fn create_sphere_blas(
     (blas, vertices, indices, blas_geo_size)
 }
 
+// 中点取得ヘルパー（重複頂点を防ぐ）
+fn get_midpoint(
+    p1: u32,
+    p2: u32,
+    vertices: &mut Vec<Vertex>,
+    cache: &mut HashMap<(u32, u32), u32>,
+) -> u32 {
+    let key = if p1 < p2 { (p1, p2) } else { (p2, p1) };
+    if let Some(&index) = cache.get(&key) {
+        return index;
+    }
+
+    let v1 = vertices[p1 as usize].pos;
+    let v2 = vertices[p2 as usize].pos;
+
+    let mid = [
+        (v1[0] + v2[0]) * 0.5,
+        (v1[1] + v2[1]) * 0.5,
+        (v1[2] + v2[2]) * 0.5,
+    ];
+
+    let length = (mid[0] * mid[0] + mid[1] * mid[1] + mid[2] * mid[2]).sqrt();
+    let n = [mid[0] / length, mid[1] / length, mid[2] / length];
+
+    vertices.push(Vertex {
+        pos: [n[0] * 0.5, n[1] * 0.5, n[2] * 0.5, 1.0],
+        normal: [n[0], n[1], n[2], 0.0],
+    });
+
+    let index = vertices.len() as u32 - 1;
+    cache.insert(key, index);
+    index
+}
+
 pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneResources {
     // 1. 各ジオメトリの生成とBLAS構築
     let (plane_blas, plane_verts, plane_indices, plane_desc) = create_plane_blas(device);
     let (cube_blas, cube_verts, cube_indices, cube_desc) = create_cube_blas(device);
-    let (sphere_blas, sphere_verts, sphere_indices, sphere_desc) = create_sphere_blas(device);
+    let (sphere_blas, sphere_verts, sphere_indices, sphere_desc) = create_sphere_blas(device, 3);
 
     let mut encoder = device.create_command_encoder(&Default::default());
 
@@ -401,8 +471,6 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     });
     global_vertices.extend_from_slice(&sphere_verts);
     global_indices.extend_from_slice(&sphere_indices);
-    current_v_offset += sphere_verts.len() as u32;
-    current_i_offset += sphere_indices.len() as u32;
 
     let global_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Global Vertex Buffer"),
@@ -423,7 +491,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     // 3. TLAS作成 (Cornell Boxの配置)
     let mut tlas = device.create_tlas(&wgpu::CreateTlasDescriptor {
         label: Some("Cornell Box TLAS"),
-        max_instances: 9, // 6 (Walls) + 2 (Boxes) + 1 (Sphere)
+        max_instances: 10, // 6 (Walls) + 2 (Boxes) + 1 (Sphere) + 1 (Lens)
         flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE,
         update_mode: wgpu::AccelerationStructureUpdateMode::Build,
     });
@@ -439,7 +507,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     };
 
     // Helper to encode Mesh ID and Material ID
-    // Mesh ID: 0=Plane, 1=Cube, 2=Sphere
+    // Mesh ID: 0=Plane, 1=Cube, 23Sphere
     let encode_id = |mesh_id: u32, mat_id: u32| (mesh_id << 16) | mat_id;
 
     // --- Walls (Plane BLAS, Mesh ID = 0) ---
@@ -520,6 +588,16 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
         encode_id(2, 6),
     );
 
+    // Lens (Sphere BLAS, Mesh ID = 2, Mat 8)
+    // Position: (0.0, 0.0, 2.0) - in front of camera (Z=3)
+    // Scale: (1.5, 1.5, 0.1) - oblate spheroid acting as a convex lens
+    tlas[9] = mk_instance(
+        &sphere_blas,
+        Mat4::from_translation(Vec3::new(0.0, 0.0, 2.0))
+            * Mat4::from_scale(Vec3::new(1.5, 1.5, 0.15)),
+        encode_id(2, 8),
+    );
+
     encoder.build_acceleration_structures(None, Some(&tlas));
     queue.submit(std::iter::once(encoder.finish()));
 
@@ -572,6 +650,12 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
             color: [0.8, 0.8, 0.8, 1.0],
             emission: [0.0, 0.0, 0.0, 1.0],
             extra: [1.0, 0.2, 0.0, 0.0], // Type=1 (Metal), Fuzz=0.2
+        },
+        // 8: Lens Glass (Dielectric)
+        MaterialUniform {
+            color: [1.0, 1.0, 1.0, 1.0],
+            emission: [0.0, 0.0, 0.0, 0.0],
+            extra: [2.0, 0.0, 1.5, 0.0], // Type=2 (Dielectric), IOR=1.5
         },
     ];
 

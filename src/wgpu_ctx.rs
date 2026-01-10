@@ -27,6 +27,20 @@ impl WgpuContext {
             .await
             .unwrap();
 
+        // アダプターの情報を取得
+        let info = adapter.get_info();
+        println!("Adapter: {} ({:?})", info.name, info.backend);
+        println!("Driver: {}", info.driver_info);
+
+        // 機能チェック
+        let features = adapter.features();
+        if features.contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY) {
+            println!("✅ Hardware Ray Tracing (Ray Query) is supported!");
+        } else {
+            println!("❌ Hardware Ray Tracing is NOT supported on this adapter.");
+            panic!("This application requires hardware ray tracing support.");
+        }
+
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,

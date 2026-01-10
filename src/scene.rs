@@ -175,7 +175,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     // 3. TLAS作成 (Cornell Boxの配置)
     let mut tlas = device.create_tlas(&wgpu::CreateTlasDescriptor {
         label: Some("Cornell Box TLAS"),
-        max_instances: 10, // 6 (Walls) + 2 (Boxes) + 1 (Sphere) + 1 (Lens)
+        max_instances: 8, // 6 (Walls) + 1 (Metal Box) + 1 (Glass Sphere)
         flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE,
         update_mode: wgpu::AccelerationStructureUpdateMode::Build,
     });
@@ -195,11 +195,11 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     let encode_id = |mesh_id: u32, mat_id: u32| (mesh_id << 16) | mat_id;
 
     // --- Walls (Plane BLAS, Mesh ID = 0) ---
-    // Floor (White, Mat 7)
+    // Floor (White, Mat 3)
     tlas[0] = mk_instance(
         &plane.blas,
         Mat4::from_translation(Vec3::new(0.0, -1.0, 0.0)) * Mat4::from_scale(Vec3::splat(2.0)),
-        encode_id(0, 7),
+        encode_id(0, 3),
     );
     // Ceiling (White, Mat 3)
     tlas[1] = mk_instance(
@@ -242,44 +242,23 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
         encode_id(0, 0),
     );
 
-    // --- Boxes (Cube BLAS, Mesh ID = 1) ---
-    // 0.002ずらす
+    // --- Objects ---
 
-    // Tall Box (Dielectric, Mat 4)
+    // Tall Box (Metal, Mat 6 - Rough Metal)
     tlas[6] = mk_instance(
         &cube.blas,
         Mat4::from_translation(Vec3::new(-0.35, -0.4 + 0.002, -0.3))
-            * Mat4::from_rotation_y(0.3)
+            * Mat4::from_rotation_y(0.4)
             * Mat4::from_scale(Vec3::new(0.6, 1.2, 0.6)),
-        encode_id(1, 4),
+        encode_id(1, 6),
     );
 
-    // Short Box (Metal, Mat 5)
+    // Glass Sphere (Mesh ID = 2, Mat 4 - Dielectric)
+    // Replace Short Box (0.4, -0.75, 0.3)
     tlas[7] = mk_instance(
-        &cube.blas,
-        Mat4::from_translation(Vec3::new(0.4, -0.7 + 0.002, 0.3))
-            * Mat4::from_rotation_y(-0.3)
-            * Mat4::from_scale(Vec3::new(0.6, 0.6, 0.6)),
-        encode_id(1, 7),
-    );
-
-    // Sphere (Mesh ID = 2, Mat 6)
-    // Move inside Tall Glass Box (-0.35, -0.4, -0.3)
-    // Box width is 0.6, so sphere scale 0.25 (Diameter 0.5) fits safely.
-    tlas[8] = mk_instance(
         &sphere.blas,
-        Mat4::from_translation(Vec3::new(-0.35, -0.4, -0.3)) * Mat4::from_scale(Vec3::splat(0.25)),
-        encode_id(2, 6),
-    );
-
-    // Lens (Sphere BLAS, Mesh ID = 2, Mat 8)
-    // Position: (0.0, 0.0, 2.0) - in front of camera (Z=3)
-    // Scale: (1.5, 1.5, 0.15) - oblate spheroid acting as a convex lens
-    tlas[9] = mk_instance(
-        &sphere.blas,
-        Mat4::from_translation(Vec3::new(0.0, 0.0, 2.0))
-            * Mat4::from_scale(Vec3::new(1.5, 1.5, 0.15)),
-        encode_id(2, 8),
+        Mat4::from_translation(Vec3::new(0.4, -0.65, 0.3)) * Mat4::from_scale(Vec3::splat(0.75)),
+        encode_id(2, 4),
     );
 
     encoder.build_acceleration_structures(None, Some(&tlas));
@@ -323,23 +302,11 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
             emission: [0.0, 0.0, 0.0, 0.0],
             extra: [1.0, 0.0, 0.0, 0.0], // Type=1 (Metal), Fuzz=0.0
         },
-        // 6: Sphere Material (Blue Light)
-        MaterialUniform {
-            color: [0.0, 0.0, 0.0, 1.0],
-            emission: [0.1, 0.1, 10.0, 1.0], // Bright Blue Light
-            extra: [3.0, 0.0, 0.0, 0.0],     // Type=3 (Light)
-        },
-        // 7: ラフな金属
+        // 6: ラフな金属
         MaterialUniform {
             color: [0.8, 0.8, 0.8, 1.0],
             emission: [0.0, 0.0, 0.0, 1.0],
             extra: [1.0, 0.2, 0.0, 0.0], // Type=1 (Metal), Fuzz=0.2
-        },
-        // 8: Lens Glass (Dielectric)
-        MaterialUniform {
-            color: [1.0, 1.0, 1.0, 1.0],
-            emission: [0.0, 0.0, 0.0, 0.0],
-            extra: [2.0, 0.0, 1.5, 0.0], // Type=2 (Dielectric), IOR=1.5
         },
     ];
 

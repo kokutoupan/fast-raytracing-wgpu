@@ -1,4 +1,5 @@
 mod camera;
+mod geometry;
 mod scene;
 mod screenshot;
 mod state;

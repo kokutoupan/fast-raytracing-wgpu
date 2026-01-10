@@ -111,6 +111,8 @@ fn get_interpolated_normal(mesh_id: u32, primitive_index: u32, barycentric: vec2
 
 // --- メインの計算関数 ---
 fn ray_color(r_in: Ray) -> vec3f {
+    const T_MIN = 0.0001;
+    const T_MAX = 100.0;
     var r = r_in;
     var accumulated_color = vec3f(0.0);
     var throughput = vec3f(1.0);
@@ -118,7 +120,7 @@ fn ray_color(r_in: Ray) -> vec3f {
 
     for (var i = 0u; i < MAX_DEPTH; i++) {
         var rq: ray_query;
-        rayQueryInitialize(&rq, tlas, RayDesc(0u, 0xFFu, 0.001, 100.0, r.origin, r.dir));
+        rayQueryInitialize(&rq, tlas, RayDesc(0u, 0xFFu, T_MIN, T_MAX, r.origin, r.dir));
         rayQueryProceed(&rq);
 
         let hit = rayQueryGetCommittedIntersection(&rq);

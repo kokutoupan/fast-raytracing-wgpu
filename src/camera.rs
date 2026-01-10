@@ -104,27 +104,37 @@ impl CameraController {
         }
     }
 
-    pub fn update_camera(&mut self, dt: std::time::Duration) {
+    pub fn update_camera(&mut self, dt: std::time::Duration) -> bool {
         let dt_secs = dt.as_secs_f32();
         let speed = 2.0 * dt_secs;
         let rotate_speed = 1.5 * dt_secs;
 
+        let mut moved = false;
+
         // 回転の更新
         if self.is_right_turn_pressed {
             self.yaw -= rotate_speed;
+            moved = true;
         }
         if self.is_left_turn_pressed {
             self.yaw += rotate_speed;
+            moved = true;
         }
         if self.is_up_turn_pressed {
             self.pitch += rotate_speed;
+            moved = true;
         }
         if self.is_down_turn_pressed {
             self.pitch -= rotate_speed;
+            moved = true;
         }
 
         // クランプ (真上・真下を見過ぎないように)
+        let old_pitch = self.pitch;
         self.pitch = self.pitch.clamp(-1.5, 1.5);
+        if self.pitch != old_pitch {
+            moved = true;
+        }
 
         // 前方ベクトル・右ベクトルの計算
         let (sin_y, cos_y) = self.yaw.sin_cos();
@@ -137,22 +147,30 @@ impl CameraController {
         // 移動の更新
         if self.is_forward_pressed {
             self.position += forward * speed;
+            moved = true;
         }
         if self.is_backward_pressed {
             self.position -= forward * speed;
+            moved = true;
         }
         if self.is_right_pressed {
             self.position += right * speed;
+            moved = true;
         }
         if self.is_left_pressed {
             self.position -= right * speed;
+            moved = true;
         }
         if self.is_up_pressed {
             self.position += up * speed;
+            moved = true;
         }
         if self.is_down_pressed {
             self.position -= up * speed;
+            moved = true;
         }
+
+        moved
     }
 
     pub fn build_uniform(&self, aspect: f32, frame_count: u32) -> CameraUniform {

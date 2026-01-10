@@ -243,7 +243,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     );
 
     // --- Boxes (Cube BLAS, Mesh ID = 1) ---
-    // 0.002ずらして影を落とさないようにする
+    // 0.002ずらす
 
     // Tall Box (Dielectric, Mat 4)
     tlas[6] = mk_instance(

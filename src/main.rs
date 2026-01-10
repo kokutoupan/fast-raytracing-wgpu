@@ -1,8 +1,10 @@
 mod camera;
 mod geometry;
+mod renderer;
 mod scene;
 mod screenshot;
 mod state;
+mod wgpu_ctx;
 mod wgpu_utils;
 use state::State;
 use std::time::Instant;
@@ -45,6 +47,12 @@ impl ApplicationHandler for App {
                 WindowEvent::CloseRequested => el.exit(),
                 WindowEvent::Resized(physical_size) => {
                     state.resize(physical_size);
+                    state.window.request_redraw();
+                }
+                WindowEvent::ScaleFactorChanged { .. } => {
+                    let physical_size = state.window.inner_size();
+                    state.resize(physical_size);
+                    state.window.request_redraw();
                 }
                 WindowEvent::RedrawRequested => {
                     // 2. カメラ位置更新 & バッファ転送
@@ -55,19 +63,29 @@ impl ApplicationHandler for App {
                     state.update(dt);
 
                     // 3. 描画
-                    let _ = state.render();
+                    match state.render() {
+                        Ok(_) => {}
+                        // サーフェスが古いかロストした場合はリサイズして再開
+                        Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                            state.resize(state.window.inner_size());
+                        }
+                        // メモリ不足は終了
+                        Err(wgpu::SurfaceError::OutOfMemory) => el.exit(),
+                        // その他(Timeout)はログに流して次フレームへ
+                        Err(e) => eprintln!("{:?}", e),
+                    }
 
                     // FPS計算
                     self.frame_count += 1;
                     if let Some(last_update) = self.last_fps_update {
                         if last_update.elapsed().as_secs_f32() >= 1.0 {
                             let fps = self.frame_count as f32 / last_update.elapsed().as_secs_f32();
-                            let width = state.config.width;
-                            let height = state.config.height;
-                            let diff = state.frame_count; // Frame count in state (accumulation count)
+                            let width = state.ctx.config.width;
+                            let height = state.ctx.config.height;
+                            let samples = state.renderer.frame_count; // Frame count in renderer (accumulation count)
                             state.window.set_title(&format!(
                                 "RayQuery Camera - FPS: {:.1} - Res: {}x{} - Samples: {}",
-                                fps, width, height, diff
+                                fps, width, height, samples
                             ));
                             self.frame_count = 0;
                             self.last_fps_update = Some(Instant::now());

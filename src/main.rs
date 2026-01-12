@@ -1,5 +1,6 @@
 mod camera;
 mod geometry;
+mod passes;
 mod renderer;
 mod scene;
 mod screenshot;

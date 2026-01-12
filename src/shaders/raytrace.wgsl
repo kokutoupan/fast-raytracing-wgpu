@@ -31,10 +31,10 @@ struct MeshInfo {
 
 // --- バインドグループ ---
 @group(0) @binding(0) var tlas: acceleration_structure;
-@group(0) @binding(1) var out_tex: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var<uniform> camera: Camera;
 @group(0) @binding(3) var<storage, read> materials: array<Material>;
-@group(0) @binding(4) var<storage, read_write> accumulation: array<vec4f>;
+@group(0) @binding(4) var<storage, read_write> _unused_accumulation: array<vec4f>;
 @group(0) @binding(5) var<storage, read> vertices: array<Vertex>;
 @group(0) @binding(6) var<storage, read> indices: array<u32>;
 @group(0) @binding(7) var<storage, read> mesh_infos: array<MeshInfo>;
@@ -206,9 +206,21 @@ fn ray_color(r_in: Ray) -> vec3f {
             throughput *= mat.color.rgb;
         }
 
-        // 吸収またはロシアンルーレットで打ち切り
-        if absorbed || dot(throughput, throughput) < 0.01 {
+        // 吸収
+        if absorbed {
             break;
+        }
+
+        // ロシアンルーレット
+        if i > 3u {
+            let p = max(throughput.r, max(throughput.g, throughput.b));
+            if p < 0.01 {
+                break;
+            }
+            if rand() > p {
+                break;
+            }
+            throughput /= p;
         }
 
         r.origin = hit_pos;
@@ -235,7 +247,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     for (var s = 0u; s < SPP; s++) {
         let jitter = vec2f(rand(), rand());
         let uv_jittered = (vec2f(id.xy) + jitter) / vec2f(size);
-        let ndc_jittered = vec2f(uv_jittered.x * 2.0 - 1.0, uv_jittered.y * 2.0 - 1.0);
+        let ndc_jittered = vec2f(uv_jittered.x * 2.0 - 1.0, 1.0 - uv_jittered.y * 2.0);
 
         let target_ndc_jittered = vec4f(ndc_jittered, 1.0, 1.0);
         let target_world_jittered = view_inv * proj_inv * target_ndc_jittered;
@@ -245,17 +257,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         pixel_color_linear += ray_color(ray);
     }
 
-    let idx = id.y * size.x + id.x;
-    var current_acc = vec4f(0.0);
-    if camera.frame_count > 0u {
-        current_acc = accumulation[idx];
-    }
-
-    let new_acc = current_acc + vec4f(pixel_color_linear, f32(SPP));
-    accumulation[idx] = new_acc;
-
-    var final_color = new_acc.rgb / new_acc.w;
-    // final_color = pow(final_color, vec3f(1.0 / 2.2)); // Gamma - Commented out to prevent double gamma with sRGB swapchain
-
+    // Output raw averaged color for this frame
+    let final_color = pixel_color_linear / f32(SPP);
     textureStore(out_tex, id.xy, vec4f(final_color, 1.0));
 }

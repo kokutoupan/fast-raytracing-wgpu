@@ -57,6 +57,7 @@ impl WgpuContext {
         let mut config = surface
             .get_default_config(&adapter, size.width, size.height)
             .unwrap();
+        config.format = config.format.remove_srgb_suffix();
         config.usage |= wgpu::TextureUsages::COPY_SRC;
         surface.configure(&device, &config);
 

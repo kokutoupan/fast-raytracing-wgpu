@@ -5,24 +5,33 @@ use bytemuck::{Pod, Zeroable};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
-struct BlitParams {
+struct ResolveParams {
     width: u32,
     height: u32,
     frame_count: u32,
     spp: u32,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+struct BlitParams {
+    scale: [f32; 2],
+    _padding: [f32; 2],
+}
+
 pub struct Renderer {
     pub render_width: u32,
     pub render_height: u32,
+    pub window_width: u32,
+    pub window_height: u32,
 
     pub compute_pipeline: wgpu::ComputePipeline,
     pub compute_bind_group: wgpu::BindGroup,
     pub compute_bind_group_layout: wgpu::BindGroupLayout,
 
-    pub blit1_pipeline: wgpu::RenderPipeline,
-    pub blit1_bind_group: wgpu::BindGroup,
-    pub blit1_bind_group_layout: wgpu::BindGroupLayout,
+    pub resolve_pipeline: wgpu::RenderPipeline,
+    pub resolve_bind_group: wgpu::BindGroup,
+    pub resolve_bind_group_layout: wgpu::BindGroupLayout,
 
     pub blit_pipeline: wgpu::RenderPipeline,
     pub blit_bind_group: wgpu::BindGroup,
@@ -32,6 +41,7 @@ pub struct Renderer {
     pub raw_raytrace_texture: wgpu::Texture,
     pub post_processed_texture: wgpu::Texture,
     pub accumulation_buffer: wgpu::Buffer,
+    pub resolve_params_buffer: wgpu::Buffer,
     pub blit_params_buffer: wgpu::Buffer,
     pub frame_count: u32,
 }
@@ -47,17 +57,15 @@ impl Renderer {
         ctx: &WgpuContext,
         scene_resources: &scene::SceneResources,
         camera_buffer: &wgpu::Buffer,
+        render_width: u32,
+        render_height: u32,
     ) -> Self {
-        // 固定の内部解像度 (例: 1280x720)
-        let render_width = 1280;
-        let render_height = 720;
-
         let shader = ctx
             .device
             .create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
-        let blit1_shader = ctx
+        let resolve_shader = ctx
             .device
-            .create_shader_module(wgpu::include_wgsl!("blit1.wgsl"));
+            .create_shader_module(wgpu::include_wgsl!("resolve.wgsl"));
         let blit_shader = ctx
             .device
             .create_shader_module(wgpu::include_wgsl!("blit.wgsl"));
@@ -101,11 +109,22 @@ impl Renderer {
         });
         let pp_view = post_processed_texture.create_view(&Default::default());
 
-        let blit_params = BlitParams {
+        let resolve_params = ResolveParams {
             width: render_width,
             height: render_height,
             frame_count: 0,
             spp: 2,
+        };
+        let resolve_params_buffer = create_buffer_init(
+            &ctx.device,
+            "Resolve Params Buffer",
+            &[resolve_params],
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        );
+
+        let blit_params = BlitParams {
+            scale: [1.0, 1.0],
+            _padding: [0.0; 2],
         };
         let blit_params_buffer = create_buffer_init(
             &ctx.device,
@@ -232,15 +251,21 @@ impl Renderer {
             &accumulation_buffer,
         );
 
-        let sampler = ctx
-            .device
-            .create_sampler(&wgpu::SamplerDescriptor::default());
+        let sampler = ctx.device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
 
-        // --- Blit 1 Pipeline Setup ---
-        let blit1_bgl = ctx
+        // --- Resolve Pipeline Setup ---
+        let resolve_bgl = ctx
             .device
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Blit1 Bind Group Layout"),
+                label: Some("Resolve Bind Group Layout"),
                 entries: &[
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
@@ -275,25 +300,25 @@ impl Renderer {
                 ],
             });
 
-        let blit1_pipeline =
+        let resolve_pipeline =
             ctx.device
                 .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some("Blit1 Pipeline"),
+                    label: Some("Resolve Pipeline"),
                     layout: Some(&ctx.device.create_pipeline_layout(
                         &wgpu::PipelineLayoutDescriptor {
                             label: None,
-                            bind_group_layouts: &[&blit1_bgl],
+                            bind_group_layouts: &[&resolve_bgl],
                             immediate_size: 0,
                         },
                     )),
                     vertex: wgpu::VertexState {
-                        module: &blit1_shader,
+                        module: &resolve_shader,
                         entry_point: Some("vs_main"),
                         compilation_options: Default::default(),
                         buffers: &[],
                     },
                     fragment: Some(wgpu::FragmentState {
-                        module: &blit1_shader,
+                        module: &resolve_shader,
                         entry_point: Some("fs_main"),
                         compilation_options: Default::default(),
                         targets: &[Some(wgpu::ColorTargetState {
@@ -309,9 +334,9 @@ impl Renderer {
                     cache: None,
                 });
 
-        let blit1_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Blit1 Bind Group"),
-            layout: &blit1_bgl,
+        let resolve_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Resolve Bind Group"),
+            layout: &resolve_bgl,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -323,12 +348,12 @@ impl Renderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: blit_params_buffer.as_entire_binding(),
+                    resource: resolve_params_buffer.as_entire_binding(),
                 },
             ],
         });
 
-        // --- Blit 2 Pipeline Setup ---
+        // --- Blit Pipeline Setup ---
         let blit_bgl = ctx
             .device
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -348,6 +373,16 @@ impl Renderer {
                         binding: 1,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::VERTEX,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
                         count: None,
                     },
                 ],
@@ -387,17 +422,36 @@ impl Renderer {
                     cache: None,
                 });
 
-        let blit_bind_group = create_blit_bind_group(&ctx.device, &blit_bgl, &pp_view, &sampler);
+        let blit_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Blit Bind Group"),
+            layout: &blit_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&pp_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: blit_params_buffer.as_entire_binding(),
+                },
+            ],
+        });
 
         Self {
             render_width,
             render_height,
+            window_width: ctx.config.width,
+            window_height: ctx.config.height,
             compute_pipeline,
             compute_bind_group,
             compute_bind_group_layout: compute_bgl,
-            blit1_pipeline,
-            blit1_bind_group,
-            blit1_bind_group_layout: blit1_bgl,
+            resolve_pipeline,
+            resolve_bind_group,
+            resolve_bind_group_layout: resolve_bgl,
             blit_pipeline,
             blit_bind_group,
             blit_bind_group_layout: blit_bgl,
@@ -405,6 +459,7 @@ impl Renderer {
             raw_raytrace_texture,
             post_processed_texture,
             accumulation_buffer,
+            resolve_params_buffer,
             blit_params_buffer,
             frame_count: 0,
         }
@@ -412,12 +467,12 @@ impl Renderer {
 
     pub fn resize(
         &mut self,
-        _ctx: &WgpuContext,
+        ctx: &WgpuContext,
         _scene_resources: &scene::SceneResources,
         _camera_buffer: &wgpu::Buffer,
     ) {
-        // 内部解像度は固定なため、ここでは何もしないか、あるいは必要に応じて拡大縮小ロジックを更新する
-        // ウィンドウ資源に依存するバインドグループがあれば更新するが、今は pp_view に依存している
+        self.window_width = ctx.config.width;
+        self.window_height = ctx.config.height;
         self.frame_count = 0;
     }
 
@@ -430,17 +485,35 @@ impl Renderer {
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
-        // Update Blit Params
-        let blit_params = BlitParams {
+        // Update Resolve Params
+        let resolve_params = ResolveParams {
             width: self.render_width,
             height: self.render_height,
             frame_count: self.frame_count,
             spp: 2,
         };
         ctx.queue.write_buffer(
+            &self.resolve_params_buffer,
+            0,
+            bytemuck::cast_slice(&[resolve_params]),
+        );
+
+        // Update Blit Scale for aspect ratio correction
+        let render_ar = self.aspect_ratio();
+        let window_ar = self.window_width as f32 / self.window_height as f32;
+        let mut scale = [1.0f32, 1.0f32];
+        if window_ar > render_ar {
+            scale[0] = render_ar / window_ar;
+        } else {
+            scale[1] = window_ar / render_ar;
+        }
+        ctx.queue.write_buffer(
             &self.blit_params_buffer,
             0,
-            bytemuck::cast_slice(&[blit_params]),
+            bytemuck::cast_slice(&[BlitParams {
+                scale,
+                _padding: [0.0; 2],
+            }]),
         );
 
         // 1. Ray Tracing Pass (Compute)
@@ -454,11 +527,11 @@ impl Renderer {
             cpass.dispatch_workgroups((self.render_width + 7) / 8, (self.render_height + 7) / 8, 1);
         }
 
-        // 2. Blit 1 Pass (Accumulation & Gamma)
+        // 2. Resolve Pass (Accumulation & Gamma)
         {
             let pp_view = self.post_processed_texture.create_view(&Default::default());
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Blit1 Pass"),
+                label: Some("Resolve Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &pp_view,
                     resolve_target: None,
@@ -473,12 +546,12 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            rpass.set_pipeline(&self.blit1_pipeline);
-            rpass.set_bind_group(0, &self.blit1_bind_group, &[]);
-            rpass.draw(0..3, 0..1);
+            rpass.set_pipeline(&self.resolve_pipeline);
+            rpass.set_bind_group(0, &self.resolve_bind_group, &[]);
+            rpass.draw(0..6, 0..1);
         }
 
-        // 3. Blit 2 Pass (Window Output)
+        // 3. Blit Pass (Window Output)
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Blit Pass"),
@@ -486,7 +559,7 @@ impl Renderer {
                     view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLUE),
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
@@ -498,7 +571,7 @@ impl Renderer {
             });
             rpass.set_pipeline(&self.blit_pipeline);
             rpass.set_bind_group(0, &self.blit_bind_group, &[]);
-            rpass.draw(0..3, 0..1);
+            rpass.draw(0..6, 0..1);
         }
 
         ctx.queue.submit(std::iter::once(encoder.finish()));

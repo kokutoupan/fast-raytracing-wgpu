@@ -60,7 +60,15 @@ impl State {
         );
 
         // 4. レンダラー初期化
-        let renderer = Renderer::new(&ctx, &scene_resources, &camera_buffer);
+        let render_width = 1280;
+        let render_height = 720;
+        let renderer = Renderer::new(
+            &ctx,
+            &scene_resources,
+            &camera_buffer,
+            render_width,
+            render_height,
+        );
 
         // レンダラーのアスペクト比を使ってカメラユニフォームを更新
         let camera_uniform = camera_controller.build_uniform(renderer.aspect_ratio(), 0);

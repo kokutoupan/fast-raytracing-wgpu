@@ -206,9 +206,21 @@ fn ray_color(r_in: Ray) -> vec3f {
             throughput *= mat.color.rgb;
         }
 
-        // 吸収またはロシアンルーレットで打ち切り
-        if absorbed || dot(throughput, throughput) < 0.01 {
+        // 吸収
+        if absorbed {
             break;
+        }
+
+        // ロシアンルーレット
+        if i > 3u {
+            let p = max(throughput.r, max(throughput.g, throughput.b));
+            if p < 0.01 {
+                break;
+            }
+            if rand() > p {
+                break;
+            }
+            throughput /= p;
         }
 
         r.origin = hit_pos;

@@ -113,11 +113,11 @@ impl CameraController {
 
         // 回転の更新
         if self.is_right_turn_pressed {
-            self.yaw -= rotate_speed;
+            self.yaw += rotate_speed;
             moved = true;
         }
         if self.is_left_turn_pressed {
-            self.yaw += rotate_speed;
+            self.yaw -= rotate_speed;
             moved = true;
         }
         if self.is_up_turn_pressed {

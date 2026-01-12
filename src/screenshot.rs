@@ -135,9 +135,9 @@ impl ScreenshotSaver {
                     for (dest_pixel, src_pixel) in
                         dest_row.chunks_exact_mut(4).zip(src_row.chunks_exact(4))
                     {
-                        dest_pixel[0] = src_pixel[2]; // R (Src:B)
+                        dest_pixel[0] = src_pixel[0]; // R (Src:B)
                         dest_pixel[1] = src_pixel[1]; // G (Src:G)
-                        dest_pixel[2] = src_pixel[0]; // B (Src:R)
+                        dest_pixel[2] = src_pixel[2]; // B (Src:R)
                         dest_pixel[3] = 255; // A
                     }
                 });

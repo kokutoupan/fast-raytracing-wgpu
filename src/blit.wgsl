@@ -22,7 +22,9 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VSOut {
         vec2f(0.0, 0.0), vec2f(0.0, 1.0), vec2f(1.0, 0.0),
         vec2f(1.0, 0.0), vec2f(0.0, 1.0), vec2f(1.0, 1.0)
     );
-    return VSOut(vec4f(pos[idx] * blit_params.scale, 0.0, 1.0), uv[idx]);
+    let p = pos[idx];
+    let pos_out = vec4f(p.x * blit_params.scale.x, p.y * blit_params.scale.y, 0.0, 1.0);
+    return VSOut(pos_out, uv[idx]);
 }
 
 @fragment

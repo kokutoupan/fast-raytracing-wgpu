@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use crate::scene;
 use wgpu::util::DeviceExt;
 

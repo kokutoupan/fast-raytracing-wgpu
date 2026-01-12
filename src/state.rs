@@ -75,12 +75,12 @@ impl State {
         ctx.queue
             .write_buffer(&camera_buffer, 0, bytemuck::cast_slice(&[camera_uniform]));
 
-        // 5. スクリーンショット準備
-        let screenshot_padded_bytes_per_row = get_padded_bytes_per_row(ctx.config.width);
+        // 5. スクリーンショット準備 (内部解像度で固定)
+        let screenshot_padded_bytes_per_row = get_padded_bytes_per_row(render_width);
         let screenshot_buffer = create_buffer(
             &ctx.device,
             "Screenshot Buffer",
-            (screenshot_padded_bytes_per_row * ctx.config.height) as u64,
+            (screenshot_padded_bytes_per_row * render_height) as u64,
             wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         );
 
@@ -106,14 +106,7 @@ impl State {
             self.renderer
                 .resize(&self.ctx, &self.scene_resources, &self.camera_buffer);
 
-            // スクリーンショットバッファも再確保
-            self.screenshot_padded_bytes_per_row = get_padded_bytes_per_row(new_size.width);
-            self.screenshot_buffer = create_buffer(
-                &self.ctx.device,
-                "Screenshot Buffer",
-                (self.screenshot_padded_bytes_per_row * new_size.height) as u64,
-                wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            );
+            // スクリーンショットバッファは内部解像度固定なので再確保不要
         }
     }
 
@@ -166,7 +159,7 @@ impl State {
         self.renderer.render(&self.ctx, &view)?;
 
         if self.screenshot_requested {
-            self.save_screenshot(&output.texture);
+            self.save_screenshot(&self.renderer.post_processed_texture);
             self.screenshot_requested = false;
         }
 
@@ -192,12 +185,12 @@ impl State {
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(self.screenshot_padded_bytes_per_row),
-                    rows_per_image: Some(self.ctx.config.height),
+                    rows_per_image: Some(self.renderer.render_height),
                 },
             },
             wgpu::Extent3d {
-                width: self.ctx.config.width,
-                height: self.ctx.config.height,
+                width: self.renderer.render_width,
+                height: self.renderer.render_height,
                 depth_or_array_layers: 1,
             },
         );
@@ -220,8 +213,8 @@ impl State {
 
             let task = ScreenshotTask {
                 data,
-                width: self.ctx.config.width,
-                height: self.ctx.config.height,
+                width: self.renderer.render_width,
+                height: self.renderer.render_height,
                 padded_bytes_per_row: self.screenshot_padded_bytes_per_row,
             };
             self.screenshot_sender.send(task).unwrap();

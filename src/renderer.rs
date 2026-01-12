@@ -5,7 +5,7 @@ use bytemuck::{Pod, Zeroable};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
-struct ResolveParams {
+struct PostParams {
     width: u32,
     height: u32,
     frame_count: u32,
@@ -19,6 +19,7 @@ struct BlitParams {
     _padding: [f32; 2],
 }
 
+#[allow(dead_code)]
 pub struct Renderer {
     pub render_width: u32,
     pub render_height: u32,
@@ -29,9 +30,9 @@ pub struct Renderer {
     pub compute_bind_group: wgpu::BindGroup,
     pub compute_bind_group_layout: wgpu::BindGroupLayout,
 
-    pub resolve_pipeline: wgpu::RenderPipeline,
-    pub resolve_bind_group: wgpu::BindGroup,
-    pub resolve_bind_group_layout: wgpu::BindGroupLayout,
+    pub post_pipeline: wgpu::ComputePipeline,
+    pub post_bind_group: wgpu::BindGroup,
+    pub post_bind_group_layout: wgpu::BindGroupLayout,
 
     pub blit_pipeline: wgpu::RenderPipeline,
     pub blit_bind_group: wgpu::BindGroup,
@@ -41,7 +42,7 @@ pub struct Renderer {
     pub raw_raytrace_texture: wgpu::Texture,
     pub post_processed_texture: wgpu::Texture,
     pub accumulation_buffer: wgpu::Buffer,
-    pub resolve_params_buffer: wgpu::Buffer,
+    pub post_params_buffer: wgpu::Buffer,
     pub blit_params_buffer: wgpu::Buffer,
     pub frame_count: u32,
 }
@@ -63,9 +64,9 @@ impl Renderer {
         let shader = ctx
             .device
             .create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
-        let resolve_shader = ctx
+        let post_shader = ctx
             .device
-            .create_shader_module(wgpu::include_wgsl!("resolve.wgsl"));
+            .create_shader_module(wgpu::include_wgsl!("post.wgsl"));
         let blit_shader = ctx
             .device
             .create_shader_module(wgpu::include_wgsl!("blit.wgsl"));
@@ -104,21 +105,23 @@ impl Renderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let pp_view = post_processed_texture.create_view(&Default::default());
 
-        let resolve_params = ResolveParams {
+        let post_params = PostParams {
             width: render_width,
             height: render_height,
             frame_count: 0,
             spp: 2,
         };
-        let resolve_params_buffer = create_buffer_init(
+        let post_params_buffer = create_buffer_init(
             &ctx.device,
-            "Resolve Params Buffer",
-            &[resolve_params],
+            "Post Params Buffer",
+            &[post_params],
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
 
@@ -261,15 +264,15 @@ impl Renderer {
             ..Default::default()
         });
 
-        // --- Resolve Pipeline Setup ---
-        let resolve_bgl = ctx
+        // --- Post Pipeline Setup ---
+        let post_bgl = ctx
             .device
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Resolve Bind Group Layout"),
+                label: Some("Post Bind Group Layout"),
                 entries: &[
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Texture {
                             sample_type: wgpu::TextureSampleType::Float { filterable: false },
                             view_dimension: wgpu::TextureViewDimension::D2,
@@ -279,7 +282,7 @@ impl Renderer {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: false },
                             has_dynamic_offset: false,
@@ -289,7 +292,17 @@ impl Renderer {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 2,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: wgpu::TextureFormat::Rgba8Unorm,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
@@ -300,43 +313,26 @@ impl Renderer {
                 ],
             });
 
-        let resolve_pipeline =
+        let post_pipeline =
             ctx.device
-                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some("Resolve Pipeline"),
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("Post Pipeline"),
                     layout: Some(&ctx.device.create_pipeline_layout(
                         &wgpu::PipelineLayoutDescriptor {
                             label: None,
-                            bind_group_layouts: &[&resolve_bgl],
+                            bind_group_layouts: &[&post_bgl],
                             immediate_size: 0,
                         },
                     )),
-                    vertex: wgpu::VertexState {
-                        module: &resolve_shader,
-                        entry_point: Some("vs_main"),
-                        compilation_options: Default::default(),
-                        buffers: &[],
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module: &resolve_shader,
-                        entry_point: Some("fs_main"),
-                        compilation_options: Default::default(),
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format: wgpu::TextureFormat::Rgba8Unorm,
-                            blend: None,
-                            write_mask: wgpu::ColorWrites::ALL,
-                        })],
-                    }),
-                    primitive: wgpu::PrimitiveState::default(),
-                    depth_stencil: None,
-                    multisample: wgpu::MultisampleState::default(),
-                    multiview_mask: None,
+                    module: &post_shader,
+                    entry_point: Some("main"),
+                    compilation_options: Default::default(),
                     cache: None,
                 });
 
-        let resolve_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Resolve Bind Group"),
-            layout: &resolve_bgl,
+        let post_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Post Bind Group"),
+            layout: &post_bgl,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -348,7 +344,11 @@ impl Renderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: resolve_params_buffer.as_entire_binding(),
+                    resource: wgpu::BindingResource::TextureView(&pp_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: post_params_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -449,9 +449,9 @@ impl Renderer {
             compute_pipeline,
             compute_bind_group,
             compute_bind_group_layout: compute_bgl,
-            resolve_pipeline,
-            resolve_bind_group,
-            resolve_bind_group_layout: resolve_bgl,
+            post_pipeline,
+            post_bind_group,
+            post_bind_group_layout: post_bgl,
             blit_pipeline,
             blit_bind_group,
             blit_bind_group_layout: blit_bgl,
@@ -459,7 +459,7 @@ impl Renderer {
             raw_raytrace_texture,
             post_processed_texture,
             accumulation_buffer,
-            resolve_params_buffer,
+            post_params_buffer,
             blit_params_buffer,
             frame_count: 0,
         }
@@ -485,17 +485,17 @@ impl Renderer {
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
-        // Update Resolve Params
-        let resolve_params = ResolveParams {
+        // Update Post Params
+        let post_params = PostParams {
             width: self.render_width,
             height: self.render_height,
             frame_count: self.frame_count,
             spp: 2,
         };
         ctx.queue.write_buffer(
-            &self.resolve_params_buffer,
+            &self.post_params_buffer,
             0,
-            bytemuck::cast_slice(&[resolve_params]),
+            bytemuck::cast_slice(&[post_params]),
         );
 
         // Update Blit Scale for aspect ratio correction
@@ -527,28 +527,15 @@ impl Renderer {
             cpass.dispatch_workgroups((self.render_width + 7) / 8, (self.render_height + 7) / 8, 1);
         }
 
-        // 2. Resolve Pass (Accumulation & Gamma)
+        // 2. Post Pass (Accumulation & Gamma) - Compute
         {
-            let pp_view = self.post_processed_texture.create_view(&Default::default());
-            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Resolve Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &pp_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
+            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Post Pass"),
                 timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
             });
-            rpass.set_pipeline(&self.resolve_pipeline);
-            rpass.set_bind_group(0, &self.resolve_bind_group, &[]);
-            rpass.draw(0..6, 0..1);
+            cpass.set_pipeline(&self.post_pipeline);
+            cpass.set_bind_group(0, &self.post_bind_group, &[]);
+            cpass.dispatch_workgroups((self.render_width + 7) / 8, (self.render_height + 7) / 8, 1);
         }
 
         // 3. Blit Pass (Window Output)

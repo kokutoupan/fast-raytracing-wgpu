@@ -130,13 +130,7 @@ impl Renderer {
         });
 
         // --- Passes ---
-        let raytrace_pass = RaytracePass::new(
-            ctx,
-            scene_resources,
-            camera_buffer,
-            &raw_view,
-            &accumulation_buffer,
-        );
+        let raytrace_pass = RaytracePass::new(ctx, scene_resources, camera_buffer, &raw_view);
 
         let post_pass = PostPass::new(
             ctx,

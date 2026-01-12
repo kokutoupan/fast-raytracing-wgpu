@@ -1,6 +1,5 @@
 use crate::scene;
 use crate::wgpu_ctx::WgpuContext;
-use crate::wgpu_utils::create_compute_bind_group;
 
 pub struct RaytracePass {
     pub pipeline: wgpu::ComputePipeline,
@@ -13,7 +12,6 @@ impl RaytracePass {
         scene_resources: &scene::SceneResources,
         camera_buffer: &wgpu::Buffer,
         raw_view: &wgpu::TextureView,
-        accumulation_buffer: &wgpu::Buffer,
     ) -> Self {
         let shader = ctx
             .device
@@ -66,7 +64,7 @@ impl RaytracePass {
                         binding: 4,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
@@ -84,16 +82,6 @@ impl RaytracePass {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 6,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 7,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -126,14 +114,40 @@ impl RaytracePass {
                     cache: None,
                 });
 
-        let bind_group = create_compute_bind_group(
-            &ctx.device,
-            &bgl,
-            scene_resources,
-            raw_view,
-            camera_buffer,
-            accumulation_buffer,
-        );
+        let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Raytrace Bind Group"),
+            layout: &bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::AccelerationStructure(&scene_resources.tlas),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(raw_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: scene_resources.material_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: scene_resources.global_vertex_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: scene_resources.global_index_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: scene_resources.mesh_info_buffer.as_entire_binding(),
+                },
+            ],
+        });
 
         Self {
             pipeline,

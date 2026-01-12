@@ -34,10 +34,9 @@ struct MeshInfo {
 @group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var<uniform> camera: Camera;
 @group(0) @binding(3) var<storage, read> materials: array<Material>;
-@group(0) @binding(4) var<storage, read_write> _unused_accumulation: array<vec4f>;
-@group(0) @binding(5) var<storage, read> vertices: array<Vertex>;
-@group(0) @binding(6) var<storage, read> indices: array<u32>;
-@group(0) @binding(7) var<storage, read> mesh_infos: array<MeshInfo>;
+@group(0) @binding(4) var<storage, read> vertices: array<Vertex>;
+@group(0) @binding(5) var<storage, read> indices: array<u32>;
+@group(0) @binding(6) var<storage, read> mesh_infos: array<MeshInfo>;
 
 // --- 乱数生成器 (PCG Hash) ---
 var<private> rng_seed: u32;

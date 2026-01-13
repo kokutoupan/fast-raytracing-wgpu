@@ -8,10 +8,15 @@ pub use crate::geometry::Vertex;
 // GPUに送るマテリアルデータ (48バイト)
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct MaterialUniform {
-    pub color: [f32; 4],
-    pub emission: [f32; 4],
-    pub extra: [f32; 4], // x: type (0=Lambert, 1=Metal, 2=Dielectric), y: fuzz, z: ior, w: padding
+pub struct Material {
+    pub base_color: [f32; 4], // 16 bytes (RGB + A/Padding)
+    pub emission: [f32; 4],   // 16 bytes (RGB + Strength)
+
+    // --- PBR Parameters (4 bytes each) ---
+    pub roughness: f32, // 0.0 ~ 1.0
+    pub metallic: f32,  // 0.0 or 1.0 (or blend)
+    pub ior: f32,       // Index of Refraction (1.45 etc)
+    pub tex_id: u32,    // Texture Array Index
 }
 
 // メッシュ情報 (16バイト)
@@ -267,46 +272,67 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     // --- 4. マテリアルバッファの作成 ---
     let materials = [
         // 0: Light
-        MaterialUniform {
-            color: [0.0, 0.0, 0.0, 1.0],
-            emission: [10.0, 10.0, 10.0, 1.0],
-            extra: [3.0, 0.0, 0.0, 0.0], // Type=3 (Light)
+        Material {
+            base_color: [0.0, 0.0, 0.0, 1.0],
+            emission: [1.0, 1.0, 1.0, 10.0], // RGB + Strength
+            roughness: 0.0,
+            metallic: 0.0,
+            ior: 1.0,
+            tex_id: 0,
         },
         // 1: Left Wall (Red)
-        MaterialUniform {
-            color: [0.65, 0.05, 0.05, 1.0],
-            emission: [0.0, 0.0, 0.0, 1.0],
-            extra: [0.0, 0.0, 0.0, 0.0],
+        Material {
+            base_color: [0.65, 0.05, 0.05, 1.0],
+            emission: [0.0, 0.0, 0.0, 0.0],
+            roughness: 1.0,
+            metallic: 0.0,
+            ior: 1.0,
+            tex_id: 0,
         },
         // 2: Right Wall (Green)
-        MaterialUniform {
-            color: [0.12, 0.45, 0.15, 1.0],
-            emission: [0.0, 0.0, 0.0, 1.0],
-            extra: [0.0, 0.0, 0.0, 0.0],
+        Material {
+            base_color: [0.12, 0.45, 0.15, 1.0],
+            emission: [0.0, 0.0, 0.0, 0.0],
+            roughness: 1.0,
+            metallic: 0.0,
+            ior: 1.0,
+            tex_id: 0,
         },
         // 3: White (Floor/Ceil/Back)
-        MaterialUniform {
-            color: [0.73, 0.73, 0.73, 1.0],
-            emission: [0.0, 0.0, 0.0, 1.0],
-            extra: [0.0, 0.0, 0.0, 0.0],
+        Material {
+            base_color: [0.73, 0.73, 0.73, 1.0],
+            emission: [0.0, 0.0, 0.0, 0.0],
+            roughness: 1.0,
+            metallic: 0.0,
+            ior: 1.0,
+            tex_id: 0,
         },
         // 4: Dielectric (Glass)
-        MaterialUniform {
-            color: [1.0, 1.0, 1.0, 1.0],
+        Material {
+            base_color: [1.0, 1.0, 1.0, 1.0],
             emission: [0.0, 0.0, 0.0, 0.0],
-            extra: [2.0, 0.0, 1.5, 0.0], // Type=2 (Dielectric), IOR=1.5
+            roughness: 0.0,
+            metallic: 0.0,
+            ior: 1.5,
+            tex_id: 0,
         },
         // 5: Metal (Silver)
-        MaterialUniform {
-            color: [0.8, 0.8, 0.8, 1.0],
+        Material {
+            base_color: [0.8, 0.8, 0.8, 1.0],
             emission: [0.0, 0.0, 0.0, 0.0],
-            extra: [1.0, 0.0, 0.0, 0.0], // Type=1 (Metal), Fuzz=0.0
+            roughness: 0.0,
+            metallic: 1.0,
+            ior: 1.0,
+            tex_id: 0,
         },
         // 6: ラフな金属
-        MaterialUniform {
-            color: [0.8, 0.8, 0.8, 1.0],
-            emission: [0.0, 0.0, 0.0, 1.0],
-            extra: [1.0, 0.2, 0.0, 0.0], // Type=1 (Metal), Fuzz=0.2
+        Material {
+            base_color: [0.8, 0.8, 0.8, 1.0],
+            emission: [0.0, 0.0, 0.0, 0.0],
+            roughness: 0.2,
+            metallic: 1.0,
+            ior: 1.0,
+            tex_id: 0,
         },
     ];
 

@@ -13,9 +13,12 @@ struct Camera {
 }
 
 struct Material {
-    color: vec4f,
+    base_color: vec4f,
     emission: vec4f,
-    extra: vec4f, // x: type, y: fuzz, z: ior, w: padding
+    roughness: f32,
+    metallic: f32,
+    ior: f32,
+    tex_id: u32,
 }
 
 struct Vertex {
@@ -143,21 +146,21 @@ fn ray_color(r_in: Ray) -> vec3f {
         let world_normal = normalize(local_normal * m_inv);
 
         // 3. エミッション加算 & ライト処理
-        let mat_type = u32(mat.extra.x);
         let is_front_face = hit.front_face;
         let ffnormal = select(-world_normal, world_normal, is_front_face);
         
-        // Type 3: Pure Light -> Terminate
-        if mat_type == 3u {
-            let no_cull = mat.extra.y > 0.0; // y > 0 means Backface Culling OFF
-            if is_front_face || no_cull {
-                accumulated_color += mat.emission.rgb * throughput;
+        // --- Light Detection ---
+        // Strengthが大きいものだけ光源として扱う
+        if mat.emission.a > 5.0 {
+            // Front face only
+            if is_front_face {
+                accumulated_color += mat.emission.rgb * mat.emission.a * throughput;
+                break;
             }
-            break;
         }
 
-        // Standard Emission (Always add)
-        accumulated_color += mat.emission.rgb * throughput;
+        // Standard Emission (Strengthが小さいもの)
+        accumulated_color += mat.emission.rgb * mat.emission.a * throughput;
 
         // ヒット位置
         let hit_pos = r.origin + r.dir * hit.t;
@@ -166,18 +169,17 @@ fn ray_color(r_in: Ray) -> vec3f {
         var scatter_dir = vec3f(0.0);
         var absorbed = false;
 
-        if mat_type == 1u { // Metal
+        if mat.metallic > 0.01 { // Metal
             let reflected = reflect(r.dir, ffnormal);
-            let fuzz = mat.extra.y;
+            let fuzz = mat.roughness;
             scatter_dir = reflected + random_unit_vector() * fuzz;
-            
-            // 反射方向が法線（表面側）を向いていなければ吸収 (法線と同じ向きなら有効)
+
             if dot(scatter_dir, ffnormal) <= 0.0 {
                 absorbed = true;
             }
-            throughput *= mat.color.rgb; // 金属色
-        } else if mat_type == 2u { // Dielectric (Glass)
-            let ir = mat.extra.z; // IOR
+            throughput *= mat.base_color.rgb;
+        } else if mat.ior > 1.01 { // Dielectric (Glass)
+            let ir = mat.ior; // IOR
             let refraction_ratio = select(ir, 1.0 / ir, is_front_face);
 
             let unit_dir = normalize(r.dir);
@@ -194,15 +196,14 @@ fn ray_color(r_in: Ray) -> vec3f {
             }
 
             scatter_dir = direction;
-            throughput *= mat.color.rgb; // ガラスも色付き可能
+            throughput *= mat.base_color.rgb;
         } else { // Lambertian (Default)
             scatter_dir = ffnormal + random_unit_vector();
-            // 縮退防止
             if length(scatter_dir) < 0.001 {
                 scatter_dir = ffnormal;
             }
             scatter_dir = normalize(scatter_dir);
-            throughput *= mat.color.rgb;
+            throughput *= mat.base_color.rgb;
         }
 
         // 吸収

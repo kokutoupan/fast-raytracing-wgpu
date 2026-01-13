@@ -33,3 +33,24 @@ pub fn get_padded_bytes_per_row(width: u32) -> u32 {
     let padding = (align - unpadded_bytes_per_row % align) % align;
     unpadded_bytes_per_row + padding
 }
+
+pub fn generate_white_texture_data(dim: u32) -> Vec<u8> {
+    vec![255; (dim * dim * 4) as usize]
+}
+
+pub fn generate_checkerboard_texture_data(dim: u32, tiles: u32) -> Vec<u8> {
+    let mut data = vec![0u8; (dim * dim * 4) as usize];
+    let tile_size = dim / tiles;
+    for y in 0..dim {
+        for x in 0..dim {
+            let is_white = ((x / tile_size) + (y / tile_size)) % 2 == 0;
+            let color = if is_white { 255 } else { 0 };
+            let idx = ((y * dim + x) * 4) as usize;
+            data[idx] = color;
+            data[idx + 1] = color;
+            data[idx + 2] = color;
+            data[idx + 3] = 255;
+        }
+    }
+    data
+}

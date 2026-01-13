@@ -305,7 +305,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
             roughness: 1.0,
             metallic: 0.0,
             ior: 1.0,
-            tex_id: 0,
+            tex_id: 1, // Floor/Back is Checker
         },
         // 4: Dielectric (Glass)
         Material {
@@ -323,7 +323,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
             roughness: 0.0,
             metallic: 1.0,
             ior: 1.0,
-            tex_id: 0,
+            tex_id: 1, // Metal is Checker
         },
         // 6: ラフな金属
         Material {
@@ -332,7 +332,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
             roughness: 0.2,
             metallic: 1.0,
             ior: 1.0,
-            tex_id: 0,
+            tex_id: 1, // Rough Metal is Checker
         },
     ];
 

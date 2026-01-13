@@ -24,6 +24,7 @@ struct Material {
 struct Vertex {
     pos: vec4f,
     normal: vec4f,
+    uv: vec4f,
 }
 
 struct MeshInfo {
@@ -40,6 +41,9 @@ struct MeshInfo {
 @group(0) @binding(4) var<storage, read> vertices: array<Vertex>;
 @group(0) @binding(5) var<storage, read> indices: array<u32>;
 @group(0) @binding(6) var<storage, read> mesh_infos: array<MeshInfo>;
+
+@group(1) @binding(0) var tex_sampler: sampler;
+@group(1) @binding(1) var textures: texture_2d_array<f32>;
 
 // --- 乱数生成器 (PCG Hash) ---
 var<private> rng_seed: u32;
@@ -89,27 +93,7 @@ struct Ray {
 }
 
 // --- 頂点法線取得・補間 ---
-fn get_interpolated_normal(mesh_id: u32, primitive_index: u32, barycentric: vec2f) -> vec3f {
-    let mesh_info = mesh_infos[mesh_id];
-    
-    // Index Bufferから3つの頂点インデックスを取得
-    let idx_offset = mesh_info.index_offset + primitive_index * 3u;
-    let i0 = indices[idx_offset + 0u] + mesh_info.vertex_offset;
-    let i1 = indices[idx_offset + 1u] + mesh_info.vertex_offset;
-    let i2 = indices[idx_offset + 2u] + mesh_info.vertex_offset;
 
-    // Vertex Bufferから3つの法線を取得
-    let n0 = vertices[i0].normal.xyz;
-    let n1 = vertices[i1].normal.xyz;
-    let n2 = vertices[i2].normal.xyz;
-
-    // 重心座標補間 (u, v corresponds to i1, i2; w = 1 - u - v corresponds to i0)
-    let u = barycentric.x;
-    let v = barycentric.y;
-    let w = 1.0 - u - v;
-
-    return normalize(n0 * w + n1 * u + n2 * v);
-}
 
 // --- メインの計算関数 ---
 fn ray_color(r_in: Ray) -> vec3f {
@@ -137,13 +121,35 @@ fn ray_color(r_in: Ray) -> vec3f {
         let mat_id = raw_id & 0xFFFFu; // Low 16 bits = Material ID
         let mat = materials[mat_id];
 
-        // 2. 法線計算 (Vertex Embedded Normals) - Moved UP before emission
-        var local_normal = get_interpolated_normal(mesh_id, hit.primitive_index, hit.barycentrics);
+        // 2. 頂点データ補間 (Normal, UV)
+        let mesh_info = mesh_infos[mesh_id];
+        let idx_offset = mesh_info.index_offset + hit.primitive_index * 3u;
+        let i0 = indices[idx_offset + 0u] + mesh_info.vertex_offset;
+        let i1 = indices[idx_offset + 1u] + mesh_info.vertex_offset;
+        let i2 = indices[idx_offset + 2u] + mesh_info.vertex_offset;
 
-        // Correct Normal Transformation: Transpose(Inverse(Model)) * Normal
+        let v0 = vertices[i0];
+        let v1 = vertices[i1];
+        let v2 = vertices[i2];
+
+        let u_bary = hit.barycentrics.x;
+        let v_bary = hit.barycentrics.y;
+        let w_bary = 1.0 - u_bary - v_bary;
+
+        let local_normal = normalize(v0.normal.xyz * w_bary + v1.normal.xyz * u_bary + v2.normal.xyz * v_bary);
+        let uv = v0.uv.xy * w_bary + v1.uv.xy * u_bary + v2.uv.xy * v_bary;
+
+        // Correct Normal Transformation
         let w2o = hit.world_to_object;
         let m_inv = mat3x3f(w2o[0], w2o[1], w2o[2]);
         let world_normal = normalize(local_normal * m_inv);
+
+        // テクスチャサンプリング (もし mat.tex_id が 0 以上ならサンプリングして base_color に乗算)
+        var tex_color = vec4f(1.0);
+        // tex_id = 0 はデフォルト（白orチェッカー）として常にサンプリングする
+        tex_color = textureSampleLevel(textures, tex_sampler, uv, i32(mat.tex_id), 0.0);
+
+        let final_base_color = mat.base_color * tex_color;
 
         // 3. エミッション加算 & ライト処理
         let is_front_face = hit.front_face;
@@ -177,7 +183,7 @@ fn ray_color(r_in: Ray) -> vec3f {
             if dot(scatter_dir, ffnormal) <= 0.0 {
                 absorbed = true;
             }
-            throughput *= mat.base_color.rgb;
+            throughput *= final_base_color.rgb;
         } else if mat.ior > 1.01 || mat.ior < 0.99 { // Dielectric (Glass)
             let ir = mat.ior; // IOR
             let refraction_ratio = select(ir, 1.0 / ir, is_front_face);
@@ -196,14 +202,14 @@ fn ray_color(r_in: Ray) -> vec3f {
             }
 
             scatter_dir = direction;
-            throughput *= mat.base_color.rgb;
+            throughput *= final_base_color.rgb;
         } else { // Lambertian (Default)
             scatter_dir = ffnormal + random_unit_vector();
             if length(scatter_dir) < 0.001 {
                 scatter_dir = ffnormal;
             }
             scatter_dir = normalize(scatter_dir);
-            throughput *= mat.base_color.rgb;
+            throughput *= final_base_color.rgb;
         }
 
         // 吸収

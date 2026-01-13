@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
-// 頂点データ (32バイト)
+// 頂点データ (48バイト)
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
     pub pos: [f32; 4],    // vec4f alignment
     pub normal: [f32; 4], // vec4f alignment
+    pub uv: [f32; 4],     // uv + padding
 }
 
 pub struct Geometry {
@@ -55,18 +56,22 @@ pub fn create_plane_blas(device: &wgpu::Device) -> Geometry {
         Vertex {
             pos: [-0.5, 0.0, 0.5, 1.0],
             normal: [0.0, 1.0, 0.0, 0.0],
+            uv: [0.0, 1.0, 0.0, 0.0],
         }, // 左手前
         Vertex {
             pos: [0.5, 0.0, 0.5, 1.0],
             normal: [0.0, 1.0, 0.0, 0.0],
+            uv: [1.0, 1.0, 0.0, 0.0],
         }, // 右手前
         Vertex {
             pos: [-0.5, 0.0, -0.5, 1.0],
             normal: [0.0, 1.0, 0.0, 0.0],
+            uv: [0.0, 0.0, 0.0, 0.0],
         }, // 左奥
         Vertex {
             pos: [0.5, 0.0, -0.5, 1.0],
             normal: [0.0, 1.0, 0.0, 0.0],
+            uv: [1.0, 0.0, 0.0, 0.0],
         }, // 右奥
     ];
     let indices: Vec<u32> = vec![0, 1, 2, 2, 1, 3]; // Triangle List
@@ -130,18 +135,22 @@ pub fn create_cube_blas(device: &wgpu::Device) -> Geometry {
         vertices.push(Vertex {
             pos: [v0[0], v0[1], v0[2], 1.0],
             normal: n,
+            uv: [0.0, 1.0, 0.0, 0.0],
         });
         vertices.push(Vertex {
             pos: [v1[0], v1[1], v1[2], 1.0],
             normal: n,
+            uv: [1.0, 1.0, 0.0, 0.0],
         });
         vertices.push(Vertex {
             pos: [v2[0], v2[1], v2[2], 1.0],
             normal: n,
+            uv: [1.0, 0.0, 0.0, 0.0],
         });
         vertices.push(Vertex {
             pos: [v3[0], v3[1], v3[2], 1.0],
             normal: n,
+            uv: [0.0, 0.0, 0.0, 0.0],
         });
 
         indices.push(v_idx);
@@ -171,6 +180,7 @@ pub fn create_sphere_blas(device: &wgpu::Device, subdivisions: u32) -> Geometry 
         vertices.push(Vertex {
             pos,
             normal: [n[0], n[1], n[2], 0.0],
+            uv: [0.0, 0.0, 0.0, 0.0], // TODO: Spherical mapping
         });
         vertices.len() as u32 - 1
     };
@@ -264,6 +274,7 @@ fn get_midpoint(
     vertices.push(Vertex {
         pos: [n[0] * 0.5, n[1] * 0.5, n[2] * 0.5, 1.0],
         normal: [n[0], n[1], n[2], 0.0],
+        uv: [0.0, 0.0, 0.0, 0.0],
     });
 
     let index = vertices.len() as u32 - 1;

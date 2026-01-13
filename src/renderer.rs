@@ -39,6 +39,7 @@ pub struct Renderer {
     pub post_params_buffer: wgpu::Buffer,
     pub blit_params_buffer: wgpu::Buffer,
     pub sampler: wgpu::Sampler,
+    pub texture_array: wgpu::Texture,
 
     pub frame_count: u32,
 }
@@ -120,17 +121,93 @@ impl Renderer {
         );
 
         let sampler = ctx.device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            address_mode_w: wgpu::AddressMode::Repeat,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
 
+        // --- Texture Array (0: White, 1: Checker) ---
+        let tex_dim = 512;
+        let texture_size = wgpu::Extent3d {
+            width: tex_dim,
+            height: tex_dim,
+            depth_or_array_layers: 2,
+        };
+        let texture_array = ctx.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Texture Array"),
+            size: texture_size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        // Layer 0: White
+        let white_data = generate_white_texture_data(tex_dim);
+        ctx.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture_array,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: 0, y: 0, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            &white_data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(tex_dim * 4),
+                rows_per_image: Some(tex_dim),
+            },
+            wgpu::Extent3d {
+                width: tex_dim,
+                height: tex_dim,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        // Layer 1: Checker
+        let checker_data = generate_checkerboard_texture_data(tex_dim, 8);
+        ctx.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture_array,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: 0, y: 0, z: 1 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            &checker_data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(tex_dim * 4),
+                rows_per_image: Some(tex_dim),
+            },
+            wgpu::Extent3d {
+                width: tex_dim,
+                height: tex_dim,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        let texture_view = texture_array.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("Texture Array View"),
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            array_layer_count: Some(2),
+            ..Default::default()
+        });
+
         // --- Passes ---
-        let raytrace_pass = RaytracePass::new(ctx, scene_resources, camera_buffer, &raw_view);
+        let raytrace_pass = RaytracePass::new(
+            ctx,
+            scene_resources,
+            camera_buffer,
+            &raw_view,
+            &texture_view,
+            &sampler,
+        );
 
         let post_pass = PostPass::new(
             ctx,
@@ -156,6 +233,7 @@ impl Renderer {
             post_params_buffer,
             blit_params_buffer,
             sampler,
+            texture_array,
             frame_count: 0,
         }
     }

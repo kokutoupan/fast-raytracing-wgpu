@@ -281,3 +281,75 @@ fn get_midpoint(
     cache.insert(key, index);
     index
 }
+
+use glam::Vec3;
+
+pub fn create_crystal_blas(device: &wgpu::Device) -> Geometry {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+
+    // 頂点データ
+    let top_tip = Vec3::new(0.0, 1.0, 0.0);
+    let top_ring = [
+        Vec3::new(0.3, 0.5, 0.3),
+        Vec3::new(-0.3, 0.5, 0.3),
+        Vec3::new(-0.3, 0.5, -0.3),
+        Vec3::new(0.3, 0.5, -0.3),
+    ];
+    let bottom_ring = [
+        Vec3::new(0.3, -0.5, 0.3),
+        Vec3::new(-0.3, -0.5, 0.3),
+        Vec3::new(-0.3, -0.5, -0.3),
+        Vec3::new(0.3, -0.5, -0.3),
+    ];
+    let bottom_tip = Vec3::new(0.0, -1.0, 0.0);
+
+    let mut add_face = |p0: Vec3, p1: Vec3, p2: Vec3| {
+        // 法線を計算 (CCW winding points normal towards viewer)
+        let edge1 = p1 - p0;
+        let edge2 = p2 - p0;
+        let n = edge1.cross(edge2).normalize();
+
+        let base = vertices.len() as u32;
+        vertices.push(Vertex {
+            pos: [p0.x, p0.y, p0.z, 1.0],
+            normal: [n.x, n.y, n.z, 0.0],
+            uv: [0.0, 0.0, 0.0, 0.0],
+        });
+        vertices.push(Vertex {
+            pos: [p1.x, p1.y, p1.z, 1.0],
+            normal: [n.x, n.y, n.z, 0.0],
+            uv: [0.0, 0.0, 0.0, 0.0],
+        });
+        vertices.push(Vertex {
+            pos: [p2.x, p2.y, p2.z, 1.0],
+            normal: [n.x, n.y, n.z, 0.0],
+            uv: [0.0, 0.0, 0.0, 0.0],
+        });
+
+        indices.push(base);
+        indices.push(base + 1);
+        indices.push(base + 2);
+    };
+
+    // 1. 上部四角錐 (4面) - CCW: tip -> next -> current
+    for i in 0..4 {
+        add_face(top_tip, top_ring[(i + 1) % 4], top_ring[i]);
+    }
+
+    // 2. 中間直方体 (4側面 * 2面)
+    for i in 0..4 {
+        let i_next = (i + 1) % 4;
+        // Tri 1: top_current -> top_next -> bottom_next
+        add_face(top_ring[i], top_ring[i_next], bottom_ring[i_next]);
+        // Tri 2: top_current -> bottom_next -> bottom_current
+        add_face(top_ring[i], bottom_ring[i_next], bottom_ring[i]);
+    }
+
+    // 3. 下部四角錐 (4面) - CCW: tip -> current -> next
+    for i in 0..4 {
+        add_face(bottom_tip, bottom_ring[i], bottom_ring[(i + 1) % 4]);
+    }
+
+    build_blas(device, "Refined Crystal BLAS", vertices, indices)
+}

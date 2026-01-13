@@ -17,6 +17,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     let plane_geo = geometry::create_plane_blas(device);
     let cube_geo = geometry::create_cube_blas(device);
     let sphere_geo = geometry::create_sphere_blas(device, 3);
+    let crystal_geo = geometry::create_crystal_blas(device);
 
     // BLAS Build
     let mut encoder = device.create_command_encoder(&Default::default());
@@ -56,6 +57,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     build_blas(&mut encoder, &plane_geo);
     build_blas(&mut encoder, &cube_geo);
     build_blas(&mut encoder, &sphere_geo);
+    build_blas(&mut encoder, &crystal_geo);
 
     queue.submit(std::iter::once(encoder.finish()));
 
@@ -63,6 +65,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     let plane_id = builder.add_mesh(plane_geo);
     let cube_id = builder.add_mesh(cube_geo);
     let sphere_id = builder.add_mesh(sphere_geo);
+    let crystal_id = builder.add_mesh(crystal_geo);
 
     // マテリアル定義
     let mat_light = builder.add_material(
@@ -74,9 +77,22 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     let mat_green = builder.add_material(Material::new([0.12, 0.45, 0.15, 1.0]).texture(0));
     let mat_white = builder.add_material(Material::new([0.73, 0.73, 0.73, 1.0]).texture(0));
     let mat_checker = builder.add_material(Material::new([0.73, 0.73, 0.73, 1.0]).texture(1));
-    let mat_glass = builder.add_material(Material::new([1.0, 1.0, 1.0, 1.0]).glass(1.5).texture(0));
     let mat_rough_metal =
         builder.add_material(Material::new([0.8, 0.8, 0.8, 1.0]).metallic(0.2).texture(1));
+
+    // 追加: 球体ライト (強い発光)
+    let mat_sphere_light = builder.add_material(
+        Material::new([1.0, 1.0, 1.0, 1.0])
+            .emission([0.02, 0.02, 0.9], 10.0) // 少し暖色
+            .texture(0),
+    );
+
+    // 追加: クリスタル (屈折)
+    let mat_crystal = builder.add_material(
+        Material::new([0.5, 0.8, 1.0, 1.0]) // 薄い水色
+            .glass(1.5)
+            .texture(0),
+    );
 
     // 3. インスタンスの配置
     // Floor (Checker)
@@ -117,13 +133,28 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
             * Mat4::from_rotation_z(std::f32::consts::FRAC_PI_2)
             * Mat4::from_scale(Vec3::splat(2.0)),
     );
-    // Light
+    // Main Light (Ceiling)
     builder.add_instance(
         plane_id,
         mat_light,
         Mat4::from_translation(Vec3::new(0.0, 0.99, 0.0))
             * Mat4::from_rotation_x(std::f32::consts::PI)
             * Mat4::from_scale(Vec3::splat(0.5)),
+    );
+
+    // クリスタル (正八面体) - ガラス球のあった場所に移動し拡大
+    let crystal_pos = Vec3::new(0.4, -0.5, 0.3);
+    builder.add_instance(
+        crystal_id,
+        mat_crystal,
+        Mat4::from_translation(crystal_pos) * Mat4::from_scale(Vec3::splat(0.5)),
+    );
+
+    // クリスタル内部の光
+    builder.add_instance(
+        sphere_id,
+        mat_sphere_light,
+        Mat4::from_translation(crystal_pos) * Mat4::from_scale(Vec3::splat(0.1)),
     );
 
     // Tall Box (Rough Metal)
@@ -133,13 +164,6 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
         Mat4::from_translation(Vec3::new(-0.35, -0.4 + 0.002, -0.3))
             * Mat4::from_rotation_y(0.4)
             * Mat4::from_scale(Vec3::new(0.6, 1.2, 0.6)),
-    );
-
-    // Glass Sphere
-    builder.add_instance(
-        sphere_id,
-        mat_glass,
-        Mat4::from_translation(Vec3::new(0.4, -0.65, 0.3)) * Mat4::from_scale(Vec3::splat(0.75)),
     );
 
     builder.build(device, queue)

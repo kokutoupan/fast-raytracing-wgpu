@@ -178,7 +178,7 @@ fn ray_color(r_in: Ray) -> vec3f {
                 absorbed = true;
             }
             throughput *= mat.base_color.rgb;
-        } else if mat.ior > 1.01 { // Dielectric (Glass)
+        } else if mat.ior > 1.01 || mat.ior < 0.99 { // Dielectric (Glass)
             let ir = mat.ior; // IOR
             let refraction_ratio = select(ir, 1.0 / ir, is_front_face);
 

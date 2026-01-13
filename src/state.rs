@@ -30,7 +30,7 @@ pub struct State {
 }
 
 impl State {
-    pub async fn new(window: winit::window::Window) -> Self {
+    pub async fn new(window: winit::window::Window, render_size: (u32, u32)) -> Self {
         let window = Arc::new(window);
         let (screenshot_sender, screenshot_receiver) = std::sync::mpsc::channel::<ScreenshotTask>();
 
@@ -60,8 +60,7 @@ impl State {
         );
 
         // 4. レンダラー初期化
-        let render_width = 1280;
-        let render_height = 720;
+        let (render_width, render_height) = render_size;
         let renderer = Renderer::new(
             &ctx,
             &scene_resources,

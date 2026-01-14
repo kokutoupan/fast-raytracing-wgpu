@@ -225,19 +225,18 @@ fn ray_color(r_in: Ray) -> vec3f {
         // 3. エミッション加算 & ライト処理
         let is_front_face = hit.front_face;
         let ffnormal = select(-world_normal, world_normal, is_front_face);
-        
-        // --- Light Detection ---
-        // Strengthが大きいものだけ光源として扱う
-        if mat.emission.a > 5.0 {
-            // Front face only
-            if is_front_face && !previous_was_diffuse {
-                accumulated_color += mat.emission.rgb * mat.emission.a * throughput;
-                break;
-            }
+
+
+        if !previous_was_diffuse && mat.emission.a > 0.0 && is_front_face {
+            accumulated_color += mat.emission.rgb * mat.emission.a * throughput;
         }
 
-        // Standard Emission (Strengthが小さいもの)
-        accumulated_color += mat.emission.rgb * mat.emission.a * throughput;
+        // --- Light Detection ---
+        // Strengthが大きいものだけ光源として扱う
+        if mat.emission.a > 1.0 {
+            break;
+        }
+        previous_was_diffuse = false;
 
         // ヒット位置
         let hit_pos = r.origin + r.dir * hit.t;
@@ -300,8 +299,10 @@ fn ray_color(r_in: Ray) -> vec3f {
                 if n_dot_l > 0.0 && l_dot_n > 0.0 {
                     // 5. 遮蔽テスト (Shadow Ray)
                     // ライトまでの距離(dist)より少し手前(T_MAX)まで飛ばす
+                    let offset_pos = hit_pos + world_normal * 0.001;
                     var shadow_rq: ray_query;
-                    rayQueryInitialize(&shadow_rq, tlas, RayDesc(0x4u, 0xFFu, 0.001, dist - 0.001, hit_pos, L));
+                    let flag = 0x4u;
+                    rayQueryInitialize(&shadow_rq, tlas, RayDesc(flag, 0xFFu, 0.001, dist - 0.001, offset_pos, L));
                     rayQueryProceed(&shadow_rq);
 
                     if rayQueryGetCommittedIntersection(&shadow_rq).kind == 0u { // 遮蔽なし
@@ -313,10 +314,12 @@ fn ray_color(r_in: Ray) -> vec3f {
 
                         let brdf = final_base_color.rgb / PI; // Lambert Diffuse
 
+
                         accumulated_color += ls.emission.rgb * ls.emission.a * brdf * n_dot_l * weight * throughput;
                     }
                 }
             }
+            previous_was_diffuse = true;
 
             scatter_dir = ffnormal + random_unit_vector();
             if length(scatter_dir) < 0.001 {

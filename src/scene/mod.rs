@@ -79,7 +79,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     let mat_white = builder.add_material(Material::new([0.73, 0.73, 0.73, 1.0]).texture(0));
     let mat_checker = builder.add_material(Material::new([0.73, 0.73, 0.73, 1.0]).texture(1));
     let mat_rough_metal =
-        builder.add_material(Material::new([0.8, 0.8, 0.8, 1.0]).metallic(0.2).texture(1));
+        builder.add_material(Material::new([0.8, 0.8, 0.8, 1.0]).metallic(0.2).texture(0));
 
     // 追加: 球体ライト (強い発光)
     let mat_sphere_light = builder.add_material(

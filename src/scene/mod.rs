@@ -3,9 +3,8 @@ pub mod light;
 pub mod material;
 pub mod resources;
 
-use crate::geometry::{self, Vertex};
+use crate::geometry;
 use glam::{Mat4, Vec3};
-use wgpu::util::DeviceExt;
 
 pub use builder::SceneBuilder;
 pub use material::Material;
@@ -20,47 +19,12 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     let sphere_geo = geometry::create_sphere_blas(device, 3);
     let crystal_geo = geometry::create_crystal_blas(device);
 
-    // BLAS Build
-    let mut encoder = device.create_command_encoder(&Default::default());
-
-    let build_blas = |encoder: &mut wgpu::CommandEncoder, geo: &geometry::Geometry| {
-        let v_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: bytemuck::cast_slice(&geo.vertices),
-            usage: wgpu::BufferUsages::BLAS_INPUT,
-        });
-        let i_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: bytemuck::cast_slice(&geo.indices),
-            usage: wgpu::BufferUsages::BLAS_INPUT,
-        });
-
-        encoder.build_acceleration_structures(
-            Some(&wgpu::BlasBuildEntry {
-                blas: &geo.blas,
-                geometry: wgpu::BlasGeometries::TriangleGeometries(vec![
-                    wgpu::BlasTriangleGeometry {
-                        size: &geo.desc,
-                        vertex_buffer: &v_buf,
-                        first_vertex: 0,
-                        vertex_stride: std::mem::size_of::<Vertex>() as u64,
-                        index_buffer: Some(&i_buf),
-                        first_index: Some(0),
-                        transform_buffer: None,
-                        transform_buffer_offset: None,
-                    },
-                ]),
-            }),
-            None,
-        );
-    };
-
-    build_blas(&mut encoder, &plane_geo);
-    build_blas(&mut encoder, &cube_geo);
-    build_blas(&mut encoder, &sphere_geo);
-    build_blas(&mut encoder, &crystal_geo);
-
-    queue.submit(std::iter::once(encoder.finish()));
+    // BLAS Build (まとめて実行)
+    SceneBuilder::build_blases(
+        device,
+        queue,
+        &[&plane_geo, &cube_geo, &sphere_geo, &crystal_geo],
+    );
 
     // 2. メッシュとマテリアルの登録
     let plane_id = builder.add_mesh(plane_geo);

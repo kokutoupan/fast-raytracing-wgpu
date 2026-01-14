@@ -166,7 +166,89 @@ fn sample_light(light_idx: u32) -> LightSample {
 }
 
 
-// --- メインの計算関数 ---
+struct HitInfo {
+    pos: vec3f,
+    normal: vec3f,
+    ffnormal: vec3f,
+    uv: vec2f,
+    mat_id: u32,
+    front_face: bool,
+    t: f32,
+}
+
+// Material evaluation and NEE functions remain here
+struct ScatterResult {
+    dir: vec3f,
+    throughput_mult: vec3f,
+    absorbed: bool,
+    was_diffuse: bool,
+}
+
+fn evaluate_material(
+    r_dir: vec3f,
+    hit: HitInfo,
+    mat: Material,
+    base_color: vec3f
+) -> ScatterResult {
+    var res: ScatterResult;
+    res.absorbed = false;
+    res.was_diffuse = false;
+
+    if mat.metallic > 0.01 { // Metal
+        let reflected = reflect(r_dir, hit.ffnormal);
+        res.dir = reflected + random_unit_vector() * mat.roughness;
+        res.absorbed = dot(res.dir, hit.ffnormal) <= 0.0;
+        res.throughput_mult = base_color;
+    } else if mat.ior > 1.01 || mat.ior < 0.99 { // Glass
+        let refraction_ratio = select(mat.ior, 1.0 / mat.ior, hit.front_face);
+        let unit_dir = normalize(r_dir);
+        let cos_theta = min(dot(-unit_dir, hit.ffnormal), 1.0);
+        let sin_theta = sqrt(1.0 - cos_theta * cos_theta);
+
+        if refraction_ratio * sin_theta > 1.0 || reflectance(cos_theta, refraction_ratio) > rand() {
+            res.dir = reflect(unit_dir, hit.ffnormal);
+        } else {
+            res.dir = refract(unit_dir, hit.ffnormal, refraction_ratio);
+        }
+        res.throughput_mult = base_color;
+    } else { // Lambertian
+        res.dir = normalize(hit.ffnormal + random_unit_vector());
+        if length(res.dir) < 0.001 { res.dir = hit.ffnormal; }
+        res.throughput_mult = base_color;
+        res.was_diffuse = true;
+    }
+
+    return res;
+}
+
+fn calculate_nee(pos: vec3f, ffnormal: vec3f, throughput: vec3f, base_color: vec3f) -> vec3f {
+    if camera.num_lights == 0u { return vec3f(0.0); }
+
+    let num_f = f32(camera.num_lights);
+    let ls = sample_light(u32(rand() * num_f));
+    let to_light = ls.pos - pos;
+    let dist_sq = dot(to_light, to_light);
+    let dist = sqrt(dist_sq);
+    let L = to_light / dist;
+
+    let n_dot_l = max(dot(ffnormal, L), 0.0);
+    let l_dot_n = max(dot(-L, ls.normal), 0.0);
+
+    if n_dot_l > 0.0 && l_dot_n > 0.0 {
+        let offset_pos = pos + ffnormal * 0.001;
+        var shadow_rq: ray_query;
+        rayQueryInitialize(&shadow_rq, tlas, RayDesc(0x4u, 0xFFu, 0.001, dist - 0.001, offset_pos, L));
+        rayQueryProceed(&shadow_rq);
+
+        if rayQueryGetCommittedIntersection(&shadow_rq).kind == 0u {
+            let pdf_solid = ls.pdf * (dist_sq / l_dot_n);
+            let weight = 1.0 / ((1.0 / num_f) * pdf_solid);
+            return ls.emission.rgb * ls.emission.a * (base_color / PI) * n_dot_l * weight * throughput;
+        }
+    }
+    return vec3f(0.0);
+}
+
 fn ray_color(r_in: Ray) -> vec3f {
     const T_MIN = 0.0001;
     const T_MAX = 100.0;
@@ -180,21 +262,17 @@ fn ray_color(r_in: Ray) -> vec3f {
         rayQueryInitialize(&rq, tlas, RayDesc(0u, 0xFFu, T_MIN, T_MAX, r.origin, r.dir));
         rayQueryProceed(&rq);
 
-        let hit = rayQueryGetCommittedIntersection(&rq);
+        let committed = rayQueryGetCommittedIntersection(&rq);
+        if committed.kind == 0u { break; }
 
-        if hit.kind == 0u {
-            break; // 背景は黒
-        }
+        // Inline Hit Info Extraction
+        var hit: HitInfo;
+        let raw_id = committed.instance_custom_data;
+        let mesh_id = raw_id >> 16u;
+        hit.mat_id = raw_id & 0xFFFFu;
 
-        // 1. マテリアル & メッシュID取得
-        let raw_id = hit.instance_custom_data;
-        let mesh_id = raw_id >> 16u; // High 16 bits = Mesh ID
-        let mat_id = raw_id & 0xFFFFu; // Low 16 bits = Material ID
-        let mat = materials[mat_id];
-
-        // 2. 頂点データ補間 (Normal, UV)
         let mesh_info = mesh_infos[mesh_id];
-        let idx_offset = mesh_info.index_offset + hit.primitive_index * 3u;
+        let idx_offset = mesh_info.index_offset + committed.primitive_index * 3u;
         let i0 = indices[idx_offset + 0u] + mesh_info.vertex_offset;
         let i1 = indices[idx_offset + 1u] + mesh_info.vertex_offset;
         let i2 = indices[idx_offset + 2u] + mesh_info.vertex_offset;
@@ -203,155 +281,57 @@ fn ray_color(r_in: Ray) -> vec3f {
         let v1 = vertices[i1];
         let v2 = vertices[i2];
 
-        let u_bary = hit.barycentrics.x;
-        let v_bary = hit.barycentrics.y;
+        let u_bary = committed.barycentrics.x;
+        let v_bary = committed.barycentrics.y;
         let w_bary = 1.0 - u_bary - v_bary;
 
         let local_normal = normalize(v0.normal.xyz * w_bary + v1.normal.xyz * u_bary + v2.normal.xyz * v_bary);
-        let uv = v0.uv.xy * w_bary + v1.uv.xy * u_bary + v2.uv.xy * v_bary;
+        hit.uv = v0.uv.xy * w_bary + v1.uv.xy * u_bary + v2.uv.xy * v_bary;
 
-        // Correct Normal Transformation
-        let w2o = hit.world_to_object;
+        let w2o = committed.world_to_object;
         let m_inv = mat3x3f(w2o[0], w2o[1], w2o[2]);
-        let world_normal = normalize(local_normal * m_inv);
+        hit.normal = normalize(local_normal * m_inv);
 
-        // テクスチャサンプリング (もし mat.tex_id が 0 以上ならサンプリングして base_color に乗算)
-        var tex_color = vec4f(1.0);
-        // tex_id = 0 はデフォルト（白orチェッカー）として常にサンプリングする
-        tex_color = textureSampleLevel(textures, tex_sampler, uv, i32(mat.tex_id), 0.0);
+        hit.front_face = committed.front_face;
+        hit.ffnormal = select(-hit.normal, hit.normal, hit.front_face);
+        hit.t = committed.t;
+        hit.pos = r.origin + r.dir * hit.t;
 
-        let final_base_color = mat.base_color * tex_color;
+        let mat = materials[hit.mat_id];
 
-        // 3. エミッション加算 & ライト処理
-        let is_front_face = hit.front_face;
-        let ffnormal = select(-world_normal, world_normal, is_front_face);
-
-
-        if !previous_was_diffuse && mat.emission.a > 0.0 && is_front_face {
+        // 1. Emission
+        if !previous_was_diffuse && mat.emission.a > 0.0 && hit.front_face {
             accumulated_color += mat.emission.rgb * mat.emission.a * throughput;
         }
 
-        // --- Light Detection ---
-        // Strengthが大きいものだけ光源として扱う
-        if mat.emission.a > 1.0 {
-            break;
-        }
-        previous_was_diffuse = false;
+        if mat.emission.a > 1.0 { break; } // Light source hit
 
-        // ヒット位置
-        let hit_pos = r.origin + r.dir * hit.t;
+        // 2. Base Color & Texture
+        let tex_color = textureSampleLevel(textures, tex_sampler, hit.uv, i32(mat.tex_id), 0.0);
+        let base_color = (mat.base_color * tex_color).rgb;
 
-        // 4. マテリアル散乱処理
-        var scatter_dir = vec3f(0.0);
-        var absorbed = false;
-
-        if mat.metallic > 0.01 { // Metal
-            let reflected = reflect(r.dir, ffnormal);
-            let fuzz = mat.roughness;
-            scatter_dir = reflected + random_unit_vector() * fuzz;
-
-            if dot(scatter_dir, ffnormal) <= 0.0 {
-                absorbed = true;
-            }
-            throughput *= final_base_color.rgb;
-            previous_was_diffuse = false; // Reflection is not sampled by NEE
-        } else if mat.ior > 1.01 || mat.ior < 0.99 { // Dielectric (Glass)
-            let ir = mat.ior; // IOR
-            let refraction_ratio = select(ir, 1.0 / ir, is_front_face);
-
-            let unit_dir = normalize(r.dir);
-            let cos_theta = min(dot(-unit_dir, ffnormal), 1.0);
-            let sin_theta = sqrt(1.0 - cos_theta * cos_theta);
-
-            let cannot_refract = refraction_ratio * sin_theta > 1.0;
-            var direction = vec3f(0.0);
-
-            if cannot_refract || reflectance(cos_theta, refraction_ratio) > rand() {
-                direction = reflect(unit_dir, ffnormal);
-            } else {
-                direction = refract(unit_dir, ffnormal, refraction_ratio);
-            }
-
-            scatter_dir = direction;
-            throughput *= final_base_color.rgb;
-            previous_was_diffuse = false; // Refraction/Reflection is not sampled by NEE
-        } else { // Lambertian (Default)
-            // NEE
-            if camera.num_lights > 0u {
-            
-                // 1. ランダムにライトを1つ選ぶ
-                let num_lights_f = f32(camera.num_lights);
-                let light_idx = u32(rand() * num_lights_f); 
-                // 選ばれる確率 (1/N)
-                let light_pick_pdf = 1.0 / num_lights_f;
-
-                // 2. そのライト上の点をサンプリング
-                let ls = sample_light(light_idx); 
-
-                // 3. シャドウレイの方向と距離
-                let to_light = ls.pos - hit_pos;
-                let dist_sq = dot(to_light, to_light);
-                let dist = sqrt(dist_sq);
-                let L = to_light / dist; // ライトへの方向ベクトル
-
-                // 4. Cos項 (N dot L)と(L dot N_light)
-                let n_dot_l = max(dot(ffnormal, L), 0.0);
-                let l_dot_n = max(dot(-L, ls.normal), 0.0); // ライトもこっちを向いているか？
-
-                if n_dot_l > 0.0 && l_dot_n > 0.0 {
-                    // 5. 遮蔽テスト (Shadow Ray)
-                    // ライトまでの距離(dist)より少し手前(T_MAX)まで飛ばす
-                    let offset_pos = hit_pos + ffnormal * 0.001;
-                    var shadow_rq: ray_query;
-                    let flag = 0x4u;
-                    rayQueryInitialize(&shadow_rq, tlas, RayDesc(flag, 0xFFu, 0.001, dist - 0.001, offset_pos, L));
-                    rayQueryProceed(&shadow_rq);
-
-                    if rayQueryGetCommittedIntersection(&shadow_rq).kind == 0u { // 遮蔽なし
-                    // 6. 寄与の計算 (Radiance Estimate)
-                    // PDF変換: Area Measure -> Solid Angle Measure
-                    // pdf_solid = pdf_area * (dist^2 / cos_theta_light)
-                        let pdf_solid = ls.pdf * (dist_sq / l_dot_n);
-                        let weight = 1.0 / (light_pick_pdf * pdf_solid); // MISウェイト（今回はNEEのみなので単純な逆数）
-
-                        let brdf = final_base_color.rgb / PI; // Lambert Diffuse
-
-
-                        accumulated_color += ls.emission.rgb * ls.emission.a * brdf * n_dot_l * weight * throughput;
-                    }
-                }
-                previous_was_diffuse = true; // NEE performed, so skip emissive hit on next bounce
-            } else {
-                previous_was_diffuse = false; // No NEE, so PT handles emissive hits
-            }
-
-            scatter_dir = ffnormal + random_unit_vector();
-            if length(scatter_dir) < 0.001 {
-                scatter_dir = ffnormal;
-            }
-            scatter_dir = normalize(scatter_dir);
-            throughput *= final_base_color.rgb;
+        // 3. NEE
+        if mat.metallic <= 0.01 && (mat.ior <= 1.01 && mat.ior >= 0.99) {
+            accumulated_color += calculate_nee(hit.pos, hit.ffnormal, throughput, base_color);
+            previous_was_diffuse = true;
+        } else {
+            previous_was_diffuse = false;
         }
 
-        // 吸収
-        if absorbed {
-            break;
-        }
+        // 4. Scattering
+        let sc = evaluate_material(r.dir, hit, mat, base_color);
+        if sc.absorbed { break; }
 
-        // ロシアンルーレット
+        throughput *= sc.throughput_mult;
+        r.origin = hit.pos;
+        r.dir = sc.dir;
+
+        // Russian Roulette
         if i > 3u {
             let p = max(throughput.r, max(throughput.g, throughput.b));
-            if p < 0.01 {
-                break;
-            }
-            if rand() > p {
-                break;
-            }
+            if p < 0.01 || rand() > p { break; }
             throughput /= p;
         }
-
-        r.origin = hit_pos;
-        r.dir = scatter_dir;
     }
 
     return accumulated_color;

@@ -54,6 +54,44 @@ impl SceneBuilder {
         id
     }
 
+    pub fn build_blases(device: &wgpu::Device, queue: &wgpu::Queue, geos: &[&geometry::Geometry]) {
+        let mut encoder = device.create_command_encoder(&Default::default());
+
+        for geo in geos {
+            let v_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Temp BLAS Vertex Buffer"),
+                contents: bytemuck::cast_slice(&geo.vertices),
+                usage: wgpu::BufferUsages::BLAS_INPUT,
+            });
+            let i_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Temp BLAS Index Buffer"),
+                contents: bytemuck::cast_slice(&geo.indices),
+                usage: wgpu::BufferUsages::BLAS_INPUT,
+            });
+
+            encoder.build_acceleration_structures(
+                std::iter::once(&wgpu::BlasBuildEntry {
+                    blas: &geo.blas,
+                    geometry: wgpu::BlasGeometries::TriangleGeometries(vec![
+                        wgpu::BlasTriangleGeometry {
+                            size: &geo.desc,
+                            vertex_buffer: &v_buf,
+                            first_vertex: 0,
+                            vertex_stride: std::mem::size_of::<Vertex>() as u64,
+                            index_buffer: Some(&i_buf),
+                            first_index: Some(0),
+                            transform_buffer: None,
+                            transform_buffer_offset: None,
+                        },
+                    ]),
+                }),
+                None,
+            );
+        }
+
+        queue.submit(std::iter::once(encoder.finish()));
+    }
+
     pub fn add_instance(&mut self, mesh_id: u32, mat_id: u32, transform: Mat4) {
         let blas = &self.blases[mesh_id as usize];
         let affine = transform.transpose().to_cols_array();

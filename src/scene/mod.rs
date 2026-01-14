@@ -1,4 +1,5 @@
 pub mod builder;
+pub mod light;
 pub mod material;
 pub mod resources;
 
@@ -141,6 +142,13 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
             * Mat4::from_rotation_x(std::f32::consts::PI)
             * Mat4::from_scale(Vec3::splat(0.5)),
     );
+    // Main Light:Light info
+    builder.add_quad_light(
+        Vec3::new(0.0, 0.99, 0.0).into(),
+        [0.5, 0.0, 0.0],
+        [0.0, 0.0, 0.5],
+        [1.0, 1.0, 1.0, 10.0],
+    );
 
     // クリスタル (正八面体) - ガラス球のあった場所に移動し拡大
     let crystal_pos = Vec3::new(0.4, -0.5, 0.3);
@@ -155,6 +163,12 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
         sphere_id,
         mat_sphere_light,
         Mat4::from_translation(crystal_pos) * Mat4::from_scale(Vec3::splat(0.1)),
+    );
+    // 球体光源の情報
+    builder.add_sphere_light(
+        Vec3::new(0.4, -0.5, 0.3).into(),
+        0.1,
+        [0.02, 0.02, 0.9, 10.0],
     );
 
     // Tall Box (Rough Metal)

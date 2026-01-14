@@ -15,4 +15,6 @@ pub struct SceneResources {
     pub mesh_info_buffer: wgpu::Buffer,
     pub blases: Vec<wgpu::Blas>,
     pub material_buffer: wgpu::Buffer,
+    pub light_buffer: wgpu::Buffer,
+    pub num_lights: u32,
 }

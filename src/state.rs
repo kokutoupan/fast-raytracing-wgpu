@@ -50,7 +50,7 @@ impl State {
 
         // 3. カメラ初期化 (最初はデフォルトのアスペクト比で初期化)
         let camera_controller = CameraController::new();
-        let camera_uniform = camera_controller.build_uniform(1.0, 0);
+        let camera_uniform = camera_controller.build_uniform(1.0, 0, 0);
 
         let camera_buffer = create_buffer_init(
             &ctx.device,
@@ -70,7 +70,7 @@ impl State {
         );
 
         // レンダラーのアスペクト比を使ってカメラユニフォームを更新
-        let camera_uniform = camera_controller.build_uniform(renderer.aspect_ratio(), 0);
+        let camera_uniform = camera_controller.build_uniform(renderer.aspect_ratio(), 0, 0);
         ctx.queue
             .write_buffer(&camera_buffer, 0, bytemuck::cast_slice(&[camera_uniform]));
 
@@ -135,9 +135,11 @@ impl State {
             self.renderer.frame_count = 0;
         }
 
-        let camera_uniform = self
-            .camera_controller
-            .build_uniform(self.renderer.aspect_ratio(), self.renderer.frame_count);
+        let camera_uniform = self.camera_controller.build_uniform(
+            self.renderer.aspect_ratio(),
+            self.renderer.frame_count,
+            self.scene_resources.num_lights,
+        );
         self.ctx.queue.write_buffer(
             &self.camera_buffer,
             0,

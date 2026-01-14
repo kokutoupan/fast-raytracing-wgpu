@@ -93,6 +93,16 @@ impl RaytracePass {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -172,6 +182,10 @@ impl RaytracePass {
                 wgpu::BindGroupEntry {
                     binding: 6,
                     resource: scene_resources.mesh_info_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: scene_resources.light_buffer.as_entire_binding(),
                 },
             ],
         });

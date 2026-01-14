@@ -1,7 +1,8 @@
 use super::material::Material;
 use super::resources::{MeshInfo, SceneResources};
 use crate::geometry::{self, Vertex};
-use glam::Mat4;
+use crate::scene::light::LightUniform;
+use glam::{Mat4, Vec3};
 use wgpu::util::DeviceExt;
 
 pub struct SceneBuilder {
@@ -11,6 +12,7 @@ pub struct SceneBuilder {
     pub mesh_infos: Vec<MeshInfo>,
     pub instances: Vec<Option<wgpu::TlasInstance>>,
     pub blases: Vec<wgpu::Blas>,
+    pub lights: Vec<LightUniform>, // ★追加
 }
 
 impl SceneBuilder {
@@ -22,6 +24,7 @@ impl SceneBuilder {
             mesh_infos: Vec::new(),
             instances: Vec::new(),
             blases: Vec::new(),
+            lights: Vec::new(),
         }
     }
 
@@ -59,6 +62,50 @@ impl SceneBuilder {
         let instance =
             wgpu::TlasInstance::new(blas, affine[..12].try_into().unwrap(), instance_id, 0xff);
         self.instances.push(Some(instance));
+    }
+
+    /// 矩形ライトを追加する
+    /// - position: 中心座標
+    /// - u: 中心から「右端」へのベクトル（向きと長さ = 幅の半分）
+    /// - v: 中心から「上端」へのベクトル（向きと長さ = 高さの半分）
+    /// - emission: 発光色 * 強度
+    pub fn add_quad_light(
+        &mut self,
+        position: [f32; 3],
+        u: [f32; 3],
+        v: [f32; 3],
+        emission: [f32; 4],
+    ) {
+        // 面積計算:
+        // u, v は「半径」相当なので、辺の長さは 2|u|, 2|v|
+        // 平行四辺形の面積 = |(2u) x (2v)| = 4 * |u x v|
+        let u_vec = Vec3::from(u);
+        let v_vec = Vec3::from(v);
+        let area = u_vec.cross(v_vec).length() * 4.0;
+
+        self.lights.push(LightUniform {
+            position,
+            type_: 0, // Quad
+            u,        // そのまま格納
+            area,
+            v, // そのまま格納
+            pad: 0,
+            emission,
+        });
+    }
+
+    // 球体ライトを追加するヘルパー
+    pub fn add_sphere_light(&mut self, center: [f32; 3], radius: f32, emission: [f32; 4]) {
+        let area = 4.0 * std::f32::consts::PI * radius * radius;
+        self.lights.push(LightUniform {
+            position: center,
+            type_: 1, // Sphere
+            u: [0.0; 3],
+            area,
+            v: [radius, 0.0, 0.0], // v.x に半径を入れておくルールにする
+            pad: 0,
+            emission,
+        });
     }
 
     pub fn build(mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> SceneResources {
@@ -99,6 +146,13 @@ impl SceneBuilder {
         encoder.build_acceleration_structures(None, Some(&tlas));
         queue.submit(std::iter::once(encoder.finish()));
 
+        // Light Buffer作成
+        let light_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Light Buffer"),
+            contents: bytemuck::cast_slice(&self.lights),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+
         SceneResources {
             tlas,
             global_vertex_buffer,
@@ -106,6 +160,8 @@ impl SceneBuilder {
             mesh_info_buffer,
             blases: self.blases,
             material_buffer,
+            light_buffer,
+            num_lights: self.lights.len() as u32,
         }
     }
 }

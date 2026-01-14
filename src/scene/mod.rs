@@ -145,8 +145,8 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     // Main Light:Light info
     builder.add_quad_light(
         Vec3::new(0.0, 0.99, 0.0).into(),
-        [0.5, 0.0, 0.0],
-        [0.0, 0.0, 0.5],
+        [0.25, 0.0, 0.0],
+        [0.0, 0.0, 0.25],
         [1.0, 1.0, 1.0, 10.0],
     );
 

@@ -254,6 +254,7 @@ fn ray_color(r_in: Ray) -> vec3f {
                 absorbed = true;
             }
             throughput *= final_base_color.rgb;
+            previous_was_diffuse = false; // Reflection is not sampled by NEE
         } else if mat.ior > 1.01 || mat.ior < 0.99 { // Dielectric (Glass)
             let ir = mat.ior; // IOR
             let refraction_ratio = select(ir, 1.0 / ir, is_front_face);
@@ -273,6 +274,7 @@ fn ray_color(r_in: Ray) -> vec3f {
 
             scatter_dir = direction;
             throughput *= final_base_color.rgb;
+            previous_was_diffuse = false; // Refraction/Reflection is not sampled by NEE
         } else { // Lambertian (Default)
             // NEE
             if camera.num_lights > 0u {
@@ -293,13 +295,13 @@ fn ray_color(r_in: Ray) -> vec3f {
                 let L = to_light / dist; // ライトへの方向ベクトル
 
                 // 4. Cos項 (N dot L)と(L dot N_light)
-                let n_dot_l = max(dot(world_normal, L), 0.0);
+                let n_dot_l = max(dot(ffnormal, L), 0.0);
                 let l_dot_n = max(dot(-L, ls.normal), 0.0); // ライトもこっちを向いているか？
 
                 if n_dot_l > 0.0 && l_dot_n > 0.0 {
                     // 5. 遮蔽テスト (Shadow Ray)
                     // ライトまでの距離(dist)より少し手前(T_MAX)まで飛ばす
-                    let offset_pos = hit_pos + world_normal * 0.001;
+                    let offset_pos = hit_pos + ffnormal * 0.001;
                     var shadow_rq: ray_query;
                     let flag = 0x4u;
                     rayQueryInitialize(&shadow_rq, tlas, RayDesc(flag, 0xFFu, 0.001, dist - 0.001, offset_pos, L));
@@ -318,8 +320,10 @@ fn ray_color(r_in: Ray) -> vec3f {
                         accumulated_color += ls.emission.rgb * ls.emission.a * brdf * n_dot_l * weight * throughput;
                     }
                 }
+                previous_was_diffuse = true; // NEE performed, so skip emissive hit on next bounce
+            } else {
+                previous_was_diffuse = false; // No NEE, so PT handles emissive hits
             }
-            previous_was_diffuse = true;
 
             scatter_dir = ffnormal + random_unit_vector();
             if length(scatter_dir) < 0.001 {

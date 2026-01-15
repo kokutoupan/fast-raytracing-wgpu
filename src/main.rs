@@ -20,6 +20,7 @@ struct App {
     last_fps_update: Option<Instant>,
     frame_count: u32,
     last_frame_time: Option<Instant>,
+    render_size: (u32, u32),
 }
 impl ApplicationHandler for App {
     fn resumed(&mut self, el: &winit::event_loop::ActiveEventLoop) {
@@ -28,7 +29,7 @@ impl ApplicationHandler for App {
                 winit::window::Window::default_attributes().with_title("RayQuery Camera"),
             )
             .unwrap();
-        self.state = Some(pollster::block_on(State::new(window)));
+        self.state = Some(pollster::block_on(State::new(window, self.render_size)));
         self.last_fps_update = Some(Instant::now());
         self.frame_count = 0;
         self.last_frame_time = Some(Instant::now());
@@ -102,6 +103,24 @@ impl ApplicationHandler for App {
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let render_size = args
+        .iter()
+        .find(|a| a.starts_with("--scale="))
+        .and_then(|a| a.split('=').nth(1))
+        .and_then(|s| {
+            let parts: Vec<&str> = s.split('x').collect();
+            if parts.len() == 2 {
+                let w = parts[0].parse::<u32>().ok();
+                let h = parts[1].parse::<u32>().ok();
+                if let (Some(w), Some(h)) = (w, h) {
+                    return Some((w, h));
+                }
+            }
+            None
+        })
+        .unwrap_or((1280, 720));
+
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);
     event_loop
@@ -110,6 +129,7 @@ fn main() {
             last_fps_update: None,
             frame_count: 0,
             last_frame_time: None,
+            render_size,
         })
         .unwrap();
 }

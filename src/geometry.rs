@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
-// 頂点データ (32バイト)
+// 頂点データ (48バイト)
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
     pub pos: [f32; 4],    // vec4f alignment
     pub normal: [f32; 4], // vec4f alignment
+    pub uv: [f32; 4],     // uv + padding
 }
 
 pub struct Geometry {
@@ -55,18 +56,22 @@ pub fn create_plane_blas(device: &wgpu::Device) -> Geometry {
         Vertex {
             pos: [-0.5, 0.0, 0.5, 1.0],
             normal: [0.0, 1.0, 0.0, 0.0],
+            uv: [0.0, 1.0, 0.0, 0.0],
         }, // 左手前
         Vertex {
             pos: [0.5, 0.0, 0.5, 1.0],
             normal: [0.0, 1.0, 0.0, 0.0],
+            uv: [1.0, 1.0, 0.0, 0.0],
         }, // 右手前
         Vertex {
             pos: [-0.5, 0.0, -0.5, 1.0],
             normal: [0.0, 1.0, 0.0, 0.0],
+            uv: [0.0, 0.0, 0.0, 0.0],
         }, // 左奥
         Vertex {
             pos: [0.5, 0.0, -0.5, 1.0],
             normal: [0.0, 1.0, 0.0, 0.0],
+            uv: [1.0, 0.0, 0.0, 0.0],
         }, // 右奥
     ];
     let indices: Vec<u32> = vec![0, 1, 2, 2, 1, 3]; // Triangle List
@@ -130,18 +135,22 @@ pub fn create_cube_blas(device: &wgpu::Device) -> Geometry {
         vertices.push(Vertex {
             pos: [v0[0], v0[1], v0[2], 1.0],
             normal: n,
+            uv: [0.0, 1.0, 0.0, 0.0],
         });
         vertices.push(Vertex {
             pos: [v1[0], v1[1], v1[2], 1.0],
             normal: n,
+            uv: [1.0, 1.0, 0.0, 0.0],
         });
         vertices.push(Vertex {
             pos: [v2[0], v2[1], v2[2], 1.0],
             normal: n,
+            uv: [1.0, 0.0, 0.0, 0.0],
         });
         vertices.push(Vertex {
             pos: [v3[0], v3[1], v3[2], 1.0],
             normal: n,
+            uv: [0.0, 0.0, 0.0, 0.0],
         });
 
         indices.push(v_idx);
@@ -171,6 +180,7 @@ pub fn create_sphere_blas(device: &wgpu::Device, subdivisions: u32) -> Geometry 
         vertices.push(Vertex {
             pos,
             normal: [n[0], n[1], n[2], 0.0],
+            uv: [0.0, 0.0, 0.0, 0.0], // TODO: Spherical mapping
         });
         vertices.len() as u32 - 1
     };
@@ -264,9 +274,82 @@ fn get_midpoint(
     vertices.push(Vertex {
         pos: [n[0] * 0.5, n[1] * 0.5, n[2] * 0.5, 1.0],
         normal: [n[0], n[1], n[2], 0.0],
+        uv: [0.0, 0.0, 0.0, 0.0],
     });
 
     let index = vertices.len() as u32 - 1;
     cache.insert(key, index);
     index
+}
+
+use glam::Vec3;
+
+pub fn create_crystal_blas(device: &wgpu::Device) -> Geometry {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+
+    // 頂点データ
+    let top_tip = Vec3::new(0.0, 1.0, 0.0);
+    let top_ring = [
+        Vec3::new(0.3, 0.5, 0.3),
+        Vec3::new(-0.3, 0.5, 0.3),
+        Vec3::new(-0.3, 0.5, -0.3),
+        Vec3::new(0.3, 0.5, -0.3),
+    ];
+    let bottom_ring = [
+        Vec3::new(0.3, -0.5, 0.3),
+        Vec3::new(-0.3, -0.5, 0.3),
+        Vec3::new(-0.3, -0.5, -0.3),
+        Vec3::new(0.3, -0.5, -0.3),
+    ];
+    let bottom_tip = Vec3::new(0.0, -1.0, 0.0);
+
+    let mut add_face = |p0: Vec3, p1: Vec3, p2: Vec3| {
+        // 法線を計算 (CCW winding points normal towards viewer)
+        let edge1 = p1 - p0;
+        let edge2 = p2 - p0;
+        let n = edge1.cross(edge2).normalize();
+
+        let base = vertices.len() as u32;
+        vertices.push(Vertex {
+            pos: [p0.x, p0.y, p0.z, 1.0],
+            normal: [n.x, n.y, n.z, 0.0],
+            uv: [0.0, 0.0, 0.0, 0.0],
+        });
+        vertices.push(Vertex {
+            pos: [p1.x, p1.y, p1.z, 1.0],
+            normal: [n.x, n.y, n.z, 0.0],
+            uv: [0.0, 0.0, 0.0, 0.0],
+        });
+        vertices.push(Vertex {
+            pos: [p2.x, p2.y, p2.z, 1.0],
+            normal: [n.x, n.y, n.z, 0.0],
+            uv: [0.0, 0.0, 0.0, 0.0],
+        });
+
+        indices.push(base);
+        indices.push(base + 1);
+        indices.push(base + 2);
+    };
+
+    // 1. 上部四角錐 (4面) - CCW: tip -> next -> current
+    for i in 0..4 {
+        add_face(top_tip, top_ring[(i + 1) % 4], top_ring[i]);
+    }
+
+    // 2. 中間直方体 (4側面 * 2面)
+    for i in 0..4 {
+        let i_next = (i + 1) % 4;
+        // Tri 1: top_current -> top_next -> bottom_next
+        add_face(top_ring[i], top_ring[i_next], bottom_ring[i_next]);
+        // Tri 2: top_current -> bottom_next -> bottom_current
+        add_face(top_ring[i], bottom_ring[i_next], bottom_ring[i]);
+    }
+
+    // 3. 下部四角錐 (4面) - CCW: tip -> current -> next
+    for i in 0..4 {
+        add_face(bottom_tip, bottom_ring[i], bottom_ring[(i + 1) % 4]);
+    }
+
+    build_blas(device, "Refined Crystal BLAS", vertices, indices)
 }

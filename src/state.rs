@@ -27,10 +27,11 @@ pub struct State {
     pub screenshot_buffer: wgpu::Buffer,
     pub screenshot_padded_bytes_per_row: u32,
     pub screenshot_sender: std::sync::mpsc::Sender<ScreenshotTask>,
+    pub auto_screenshot_done: bool,
 }
 
 impl State {
-    pub async fn new(window: winit::window::Window) -> Self {
+    pub async fn new(window: winit::window::Window, render_size: (u32, u32)) -> Self {
         let window = Arc::new(window);
         let (screenshot_sender, screenshot_receiver) = std::sync::mpsc::channel::<ScreenshotTask>();
 
@@ -46,11 +47,11 @@ impl State {
         let ctx = WgpuContext::new(window.clone()).await;
 
         // 2. シーン構築
-        let scene_resources = scene::create_cornell_box(&ctx.device, &ctx.queue);
+        let scene_resources = scene::create_restir_scene(&ctx.device, &ctx.queue);
 
         // 3. カメラ初期化 (最初はデフォルトのアスペクト比で初期化)
         let camera_controller = CameraController::new();
-        let camera_uniform = camera_controller.build_uniform(1.0, 0);
+        let camera_uniform = camera_controller.build_uniform(1.0, 0, 0);
 
         let camera_buffer = create_buffer_init(
             &ctx.device,
@@ -60,8 +61,7 @@ impl State {
         );
 
         // 4. レンダラー初期化
-        let render_width = 1280;
-        let render_height = 720;
+        let (render_width, render_height) = render_size;
         let renderer = Renderer::new(
             &ctx,
             &scene_resources,
@@ -71,7 +71,7 @@ impl State {
         );
 
         // レンダラーのアスペクト比を使ってカメラユニフォームを更新
-        let camera_uniform = camera_controller.build_uniform(renderer.aspect_ratio(), 0);
+        let camera_uniform = camera_controller.build_uniform(renderer.aspect_ratio(), 0, 0);
         ctx.queue
             .write_buffer(&camera_buffer, 0, bytemuck::cast_slice(&[camera_uniform]));
 
@@ -96,6 +96,7 @@ impl State {
             screenshot_buffer,
             screenshot_padded_bytes_per_row,
             screenshot_sender,
+            auto_screenshot_done: false,
         }
     }
 
@@ -136,9 +137,11 @@ impl State {
             self.renderer.frame_count = 0;
         }
 
-        let camera_uniform = self
-            .camera_controller
-            .build_uniform(self.renderer.aspect_ratio(), self.renderer.frame_count);
+        let camera_uniform = self.camera_controller.build_uniform(
+            self.renderer.aspect_ratio(),
+            self.renderer.frame_count,
+            self.scene_resources.num_lights,
+        );
         self.ctx.queue.write_buffer(
             &self.camera_buffer,
             0,
@@ -157,6 +160,17 @@ impl State {
             .create_view(&wgpu::TextureViewDescriptor::default());
 
         self.renderer.render(&self.ctx, &view)?;
+
+        // 自動スクリーンショット (検証用: 最初の1回だけ)
+        const TARGET_SPP: u32 = 64;
+        if !self.auto_screenshot_done && self.renderer.frame_count == TARGET_SPP {
+            println!(
+                "Target SPP ({}) reached! Taking one-time automatic screenshot...",
+                TARGET_SPP
+            );
+            self.screenshot_requested = true;
+            self.auto_screenshot_done = true;
+        }
 
         if self.screenshot_requested {
             self.save_screenshot(&self.renderer.post_processed_texture);

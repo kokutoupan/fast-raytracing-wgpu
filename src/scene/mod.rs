@@ -186,8 +186,8 @@ pub fn create_restir_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneR
     );
 
     // 5. 多数の光源 (Grid状に配置)
-    let rows = 8;
-    let cols = 8;
+    let rows = 10;
+    let cols = 10;
     let spacing = 1.0;
     let light_radius = 0.05;
     let emission_strength = 20.0;

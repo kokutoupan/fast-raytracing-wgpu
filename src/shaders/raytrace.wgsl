@@ -169,6 +169,43 @@ fn sample_light(light_idx: u32) -> LightSample {
 }
 
 
+struct Reservoir {
+    y: u32,       // 選ばれたライトID
+    w_sum: f32,   // 重みの合計
+    M: u32,       // 処理した候補数
+    W: f32,       // 最終的なMISウェイト
+}
+
+fn init_reservoir() -> Reservoir {
+    return Reservoir(0u, 0.0, 0u, 0.0);
+}
+
+fn update_reservoir(r: ptr<function, Reservoir>, y_new: u32, w_new: f32) {
+    (*r).w_sum += w_new;
+    (*r).M += 1u;
+    if rand() * (*r).w_sum < w_new {
+        (*r).y = y_new;
+    }
+}
+
+// ターゲット評価関数: 「影を無視して、このライトがどれくらい明るそうか」
+fn evaluate_target(light_id: u32, pos: vec3f, normal: vec3f) -> f32 {
+    let light = lights[light_id];
+    let le = length(light.emission.rgb) * light.emission.a;
+
+    let to_light = light.position - pos;
+    let dist_sq = dot(to_light, to_light);
+    
+    // 簡易的な幾何項 (cosθ / dist^2)
+    // ※選抜段階では「点光源」扱いで高速化します
+    let dist = sqrt(dist_sq);
+    let L = to_light / dist;
+    let n_dot_l = max(dot(normal, L), 0.0);
+
+    // 面積を考慮 (Areaが大きいライトほど選ばれやすくする)
+    return (le * n_dot_l * light.area) / max(0.001, dist_sq);
+}
+
 struct HitInfo {
     pos: vec3f,
     normal: vec3f,
@@ -419,8 +456,41 @@ fn calculate_nee(
 ) -> vec3f {
     if camera.num_lights == 0u { return vec3f(0.0); }
 
-    let num_f = f32(camera.num_lights);
-    let ls = sample_light(u32(rand() * num_f));
+    let num_lights = camera.num_lights;
+    let num_f = f32(num_lights);
+
+
+    // --- Phase 1: RIS (候補選抜) ---
+    // 32個の候補から「最強のライト」を1つ決める
+    const CANDIDATE_COUNT = 32u;
+    var r = init_reservoir();
+
+    for (var i = 0u; i < CANDIDATE_COUNT; i++) {
+        // A. ランダムにライトを選ぶ (Source PDF = 1/N)
+        let light_idx = u32(rand() * f32(num_lights));
+        if light_idx >= num_lights { continue; }
+
+        // B. 重要度を計算 (Target PDF = p_hat)
+        let p_hat = evaluate_target(light_idx, pos, ffnormal);
+
+        // C. ウェイト w = p_hat / p_source (p_source=1/N は定数なので省略可)
+        let w = p_hat;
+
+        update_reservoir(&r, light_idx, w);
+    }
+
+    // --- Phase 2: Shading (本番計算) ---
+    // 選ばれたエース級ライト(r.y)に対してのみ、重いシャドウレイを飛ばす
+    let selected_light_id = r.y;
+    // W (MIS weight) の計算
+    let p_hat_selected = evaluate_target(selected_light_id, pos, ffnormal);
+    if p_hat_selected <= 0.0 { return vec3f(0.0); }
+
+    // RIS Weight: W = (1/M) * (sum(w) / p_hat)
+    // p_source = 1/N なので、最後に N (= num_f) を掛ける
+    r.W = r.w_sum / (f32(r.M) * p_hat_selected) * num_f;
+
+    let ls = sample_light(selected_light_id);
 
     let offset_pos = pos + ffnormal * 0.001;
     let to_light = ls.pos - offset_pos;
@@ -439,20 +509,17 @@ fn calculate_nee(
         rayQueryProceed(&shadow_rq);
 
         if rayQueryGetCommittedIntersection(&shadow_rq).kind == 0u {
-            // 面積測度 -> 立体角測度
-            let pdf_solid = ls.pdf * (dist_sq / l_dot_n);
-            let pdf_nee = (1.0 / num_f) * pdf_solid;
 
             // BSDF (BRDF) の評価
             let f = eval_bsdf(ffnormal, L, wo, mat, base_color);
+            let light_area = 1.0 / ls.pdf; // ★これを追加！
 
-            // MIS Weight (Balance Heuristic)
-            let pdf_bsdf = eval_pdf(ffnormal, L, wo, mat);
-            let weight = pdf_nee / (pdf_nee + pdf_bsdf);
+            // ReSTIR DI Estimator:
+            // L = f * Le * G * W
+            // G = (cosθ * cosθ') / dist^2
+            let G = (n_dot_l * l_dot_n) / max(0.001, dist_sq);
 
-            // Contribution = Le * f * cos * weight / pdf_nee
-            // (1.0/pdf_nee) と pdf_nee で約分できますが、MISの形を残しています
-            return ls.emission.rgb * ls.emission.a * f * n_dot_l * weight * (throughput / pdf_nee);
+            return ls.emission.rgb * ls.emission.a * f * G * r.W * throughput * light_area;
         }
     }
     return vec3f(0.0);

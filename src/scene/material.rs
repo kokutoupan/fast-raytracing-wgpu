@@ -2,30 +2,32 @@
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Material {
-    pub base_color: [f32; 4], // 16 bytes (RGB + A/Padding)
-    pub emission: [f32; 4],   // 16 bytes (RGB + Strength)
+    pub base_color: [f32; 4], // 16 bytes
+    pub light_index: i32,     // 4 bytes
+    pub _pad0: [u32; 3],      // 12 bytes
 
     // --- PBR Parameters (4 bytes each) ---
-    pub roughness: f32, // 0.0 ~ 1.0
-    pub metallic: f32,  // 0.0 or 1.0 (or blend)
-    pub ior: f32,       // Index of Refraction (1.45 etc)
-    pub tex_id: u32,    // Texture Array Index
+    pub roughness: f32,
+    pub metallic: f32,
+    pub ior: f32,
+    pub tex_id: u32,
 }
 
 impl Material {
     pub fn new(base_color: [f32; 4]) -> Self {
         Self {
             base_color,
-            emission: [0.0; 4],
+            light_index: -1,
+            _pad0: [0; 3],
             roughness: 0.5,
             metallic: 0.0,
             ior: 1.0,
-            tex_id: 0, // Default White
+            tex_id: 0,
         }
     }
 
-    pub fn emission(mut self, emission: [f32; 3], strength: f32) -> Self {
-        self.emission = [emission[0], emission[1], emission[2], strength];
+    pub fn light_index(mut self, index: i32) -> Self {
+        self.light_index = index;
         self
     }
 

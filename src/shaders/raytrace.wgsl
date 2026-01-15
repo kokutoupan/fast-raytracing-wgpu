@@ -18,7 +18,10 @@ struct Camera {
 
 struct Material {
     base_color: vec4f,
-    emission: vec4f,
+    light_index: i32,
+    _p0: u32,
+    _p1: u32,
+    _p2: u32,
     roughness: f32,
     metallic: f32,
     ior: f32,
@@ -419,7 +422,8 @@ fn calculate_nee(
     let num_f = f32(camera.num_lights);
     let ls = sample_light(u32(rand() * num_f));
 
-    let to_light = ls.pos - pos;
+    let offset_pos = pos + ffnormal * 0.001;
+    let to_light = ls.pos - offset_pos;
     let dist_sq = dot(to_light, to_light);
     let dist = sqrt(dist_sq);
     let L = to_light / dist; // wi
@@ -429,9 +433,9 @@ fn calculate_nee(
 
     // 表面がライトを向いていて、かつライトの表面が見えている場合
     if n_dot_l > 0.0 && l_dot_n > 0.0 {
-        let offset_pos = pos + ffnormal * 0.001;
         var shadow_rq: ray_query;
-        rayQueryInitialize(&shadow_rq, tlas, RayDesc(0x4u, 0xFFu, 0.001, dist - 0.001, offset_pos, L));
+        let t_max = max(0.0, dist - 0.001);
+        rayQueryInitialize(&shadow_rq, tlas, RayDesc(0x4u, 0xFFu, 0.001, t_max, offset_pos, L));
         rayQueryProceed(&shadow_rq);
 
         if rayQueryGetCommittedIntersection(&shadow_rq).kind == 0u {
@@ -461,6 +465,7 @@ fn ray_color(r_in: Ray) -> vec3f {
     var accumulated_color = vec3f(0.0);
     var throughput = vec3f(1.0);
     var previous_was_diffuse = false;
+    var last_bsdf_pdf: f32 = 0.0;
 
     for (var i = 0u; i < MAX_DEPTH; i++) {
         var rq: ray_query;
@@ -504,12 +509,36 @@ fn ray_color(r_in: Ray) -> vec3f {
 
         let mat = materials[hit.mat_id];
 
-        // 1. Emission
-        if !previous_was_diffuse && mat.emission.a > 0.0 && hit.front_face {
-            accumulated_color += mat.emission.rgb * mat.emission.a * throughput;
+        // 1. Emission (発光の処理)
+        if mat.light_index >= 0 && hit.front_face {
+            let light = lights[mat.light_index];
+            var mis_weight = 1.0;
+
+            if previous_was_diffuse {
+            // A. 前回のBSDF確率（持ち越しておいた変数）
+                let p_bsdf = last_bsdf_pdf;
+
+            // B. 今回のNEE確率（逆算）
+                let dist_sq = hit.t * hit.t;
+                let light_cos = max(dot(hit.ffnormal, -r.dir), 0.0);
+
+                let light_area = light.area;
+                let num_lights = f32(camera.num_lights);
+
+            // p_nee = (1 / Area) * (dist^2 / cosθ) * (1 / ライト個数)
+                var p_nee = (1.0 / light_area) * (dist_sq / light_cos) * (1.0 / num_lights);
+
+                if light_cos < 0.001 { p_nee = 0.0; }
+
+            // バランスヒューリスティック
+                mis_weight = p_bsdf / (p_bsdf + p_nee);
+            }
+
+            accumulated_color += light.emission.rgb * light.emission.a * throughput * mis_weight;
+                break;
         }
 
-        if mat.emission.a > 1.0 { break; } // Light source hit
+        if mat.light_index >= 0 && lights[mat.light_index].emission.a > 1.0 { break; } // Light source hit
 
         // 2. Base Color & Texture
         let tex_color = textureSampleLevel(textures, tex_sampler, hit.uv, i32(mat.tex_id), 0.0);
@@ -534,6 +563,8 @@ fn ray_color(r_in: Ray) -> vec3f {
 
         // 吸収判定: ウェイトが真っ黒(0,0,0)なら、これ以上計算しても意味がないので終了
         if sc.weight.x <= 0.0 && sc.weight.y <= 0.0 && sc.weight.z <= 0.0 { break; }
+
+        last_bsdf_pdf = sc.pdf;
 
         // スループットとレイの更新
         throughput *= sc.weight;

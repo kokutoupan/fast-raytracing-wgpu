@@ -35,7 +35,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     // マテリアル定義
     let mat_light = builder.add_material(
         Material::new([0.0, 0.0, 0.0, 1.0])
-            .emission([1.0, 1.0, 1.0], 10.0)
+            .light_index(0)
             .texture(0),
     );
     let mat_red = builder.add_material(Material::new([0.65, 0.05, 0.05, 1.0]).texture(0));
@@ -48,7 +48,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     // 追加: 球体ライト (強い発光)
     let mat_sphere_light = builder.add_material(
         Material::new([1.0, 1.0, 1.0, 1.0])
-            .emission([0.02, 0.02, 0.9], 10.0) // 少し暖色
+            .light_index(1) // 球体ライトのインデックス
             .texture(0),
     );
 

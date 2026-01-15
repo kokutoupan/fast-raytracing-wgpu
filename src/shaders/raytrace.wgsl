@@ -58,6 +58,13 @@ struct LightSample {
     emission: vec4f // 発光強度
 }
 
+struct Reservoir {
+    y: u32,       // 選ばれたライトID
+    w_sum: f32,   // 重みの合計
+    M: u32,       // 処理した候補数
+    W: f32,       // 最終的なMISウェイト
+}
+
 // --- バインドグループ ---
 @group(0) @binding(0) var tlas: acceleration_structure;
 @group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
@@ -67,6 +74,8 @@ struct LightSample {
 @group(0) @binding(5) var<storage, read> indices: array<u32>;
 @group(0) @binding(6) var<storage, read> mesh_infos: array<MeshInfo>;
 @group(0) @binding(7) var<storage, read> lights: array<Light>;
+@group(0) @binding(8) var<storage, read_write> reservoirs_in: array<Reservoir>;
+@group(0) @binding(9) var<storage, read_write> reservoirs_out: array<Reservoir>;
 
 @group(1) @binding(0) var tex_sampler: sampler;
 @group(1) @binding(1) var textures: texture_2d_array<f32>;
@@ -166,14 +175,6 @@ fn sample_light(light_idx: u32) -> LightSample {
     }
 
     return smp;
-}
-
-
-struct Reservoir {
-    y: u32,       // 選ばれたライトID
-    w_sum: f32,   // 重みの合計
-    M: u32,       // 処理した候補数
-    W: f32,       // 最終的なMISウェイト
 }
 
 fn init_reservoir() -> Reservoir {
@@ -452,7 +453,9 @@ fn calculate_nee(
     wo: vec3f,           // 視線方向 (-ray.dir)
     throughput: vec3f,
     mat: Material,       // マテリアル
-    base_color: vec3f
+    base_color: vec3f,
+    pixel_idx: vec2u,
+    depth: u32,
 ) -> vec3f {
     if camera.num_lights == 0u { return vec3f(0.0); }
 
@@ -462,7 +465,7 @@ fn calculate_nee(
 
     // --- Phase 1: RIS (候補選抜) ---
     // 32個の候補から「最強のライト」を1つ決める
-    const CANDIDATE_COUNT = 32u;
+    const CANDIDATE_COUNT = 16u;
     var r = init_reservoir();
 
     for (var i = 0u; i < CANDIDATE_COUNT; i++) {
@@ -477,6 +480,30 @@ fn calculate_nee(
         let w = p_hat;
 
         update_reservoir(&r, light_idx, w);
+    }
+
+    if depth == 0u {
+        let size = textureDimensions(out_tex);
+        let prev_r = reservoirs_in[pixel_idx.y * size.x + pixel_idx.x];
+
+        let p_hat_prev = evaluate_target(prev_r.y, pos, ffnormal);
+        let w_prev = p_hat_prev;
+
+        if prev_r.M > 0u && p_hat_prev > 0.0 {
+            let limit_M = min(prev_r.M, 20u);
+            update_reservoir(&r, prev_r.y, p_hat_prev * prev_r.W * f32(limit_M));
+            r.M += (limit_M - 1u);
+        }
+
+        // --- 結果を保存 ---
+        // 次のフレームのために、現在の最良結果を保存
+        // Wを計算してから保存
+        let p_hat_curr = evaluate_target(r.y, pos, ffnormal);
+        r.W = 0.0;
+        if p_hat_curr > 0.0 {
+            r.W = (r.w_sum / f32(r.M)) / p_hat_curr;
+        }
+        reservoirs_out[pixel_idx.y * size.x + pixel_idx.x] = r;
     }
 
     // --- Phase 2: Shading (本番計算) ---
@@ -525,7 +552,7 @@ fn calculate_nee(
     return vec3f(0.0);
 }
 
-fn ray_color(r_in: Ray) -> vec3f {
+fn ray_color(r_in: Ray, pixel_idx: vec2u) -> vec3f {
     const T_MIN = 0.0001;
     const T_MAX = 100.0;
     var r = r_in;
@@ -618,7 +645,7 @@ fn ray_color(r_in: Ray) -> vec3f {
 
         if !is_specular_delta {
             // Lambert (非金属) のみここで光源を探す
-            accumulated_color += calculate_nee(hit.pos, hit.ffnormal, -r.dir, throughput, mat, base_color);
+            accumulated_color += calculate_nee(hit.pos, hit.ffnormal, -r.dir, throughput, mat, base_color, pixel_idx, i);
             previous_was_diffuse = true;
         } else {
             // 金属やガラスはここで光源を探さず、次の sample_bsdf でレイを飛ばして直接当てる
@@ -674,7 +701,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         let direction_jittered = normalize(target_world_jittered.xyz / target_world_jittered.w - origin);
 
         let ray = Ray(origin, direction_jittered);
-        pixel_color_linear += ray_color(ray);
+        pixel_color_linear += ray_color(ray, id.xy);
     }
 
     // Output raw averaged color for this frame

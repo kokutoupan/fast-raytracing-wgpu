@@ -207,6 +207,8 @@ impl Renderer {
             &raw_view,
             &texture_view,
             &sampler,
+            render_width,
+            render_height,
         );
 
         let post_pass = PostPass::new(
@@ -289,8 +291,12 @@ impl Renderer {
         );
 
         // 1. Ray Tracing Pass
-        self.raytrace_pass
-            .execute(&mut encoder, self.render_width, self.render_height);
+        self.raytrace_pass.execute(
+            &mut encoder,
+            self.render_width,
+            self.render_height,
+            self.frame_count,
+        );
 
         // 2. Post Pass
         self.post_pass

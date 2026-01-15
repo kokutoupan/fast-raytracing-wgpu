@@ -27,6 +27,7 @@ pub struct State {
     pub screenshot_buffer: wgpu::Buffer,
     pub screenshot_padded_bytes_per_row: u32,
     pub screenshot_sender: std::sync::mpsc::Sender<ScreenshotTask>,
+    pub auto_screenshot_done: bool,
 }
 
 impl State {
@@ -95,6 +96,7 @@ impl State {
             screenshot_buffer,
             screenshot_padded_bytes_per_row,
             screenshot_sender,
+            auto_screenshot_done: false,
         }
     }
 
@@ -158,6 +160,17 @@ impl State {
             .create_view(&wgpu::TextureViewDescriptor::default());
 
         self.renderer.render(&self.ctx, &view)?;
+
+        // 自動スクリーンショット (検証用: 最初の1回だけ)
+        const TARGET_SPP: u32 = 64;
+        if !self.auto_screenshot_done && self.renderer.frame_count == TARGET_SPP {
+            println!(
+                "Target SPP ({}) reached! Taking one-time automatic screenshot...",
+                TARGET_SPP
+            );
+            self.screenshot_requested = true;
+            self.auto_screenshot_done = true;
+        }
 
         if self.screenshot_requested {
             self.save_screenshot(&self.renderer.post_processed_texture);

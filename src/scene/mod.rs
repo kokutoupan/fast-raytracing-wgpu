@@ -146,3 +146,110 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
 
     builder.build(device, queue)
 }
+
+pub fn create_restir_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneResources {
+    let mut builder = SceneBuilder::new();
+
+    // 1. 各ジオメトリの生成
+    let plane_geo = geometry::create_plane_blas(device);
+    let sphere_geo = geometry::create_sphere_blas(device, 2); // 軽めの分割で
+    let cube_geo = geometry::create_cube_blas(device);
+
+    // BLAS Build
+    SceneBuilder::build_blases(device, queue, &[&plane_geo, &sphere_geo, &cube_geo]);
+
+    // 2. メッシュの登録
+    let plane_id = builder.add_mesh(plane_geo);
+    let sphere_id = builder.add_mesh(sphere_geo);
+    let cube_id = builder.add_mesh(cube_geo);
+
+    // 3. マテリアル
+    let mat_floor = builder.add_material(Material::new([0.73, 0.73, 0.73, 1.0]).texture(0));
+    let mat_wall = builder.add_material(Material::new([0.73, 0.73, 0.73, 1.0]).texture(0));
+    let mat_metal =
+        builder.add_material(Material::new([1.0, 1.0, 1.0, 1.0]).metallic(0.0).texture(0));
+
+    // 4. 床と壁
+    // Floor
+    builder.add_instance(
+        plane_id,
+        mat_floor,
+        Mat4::from_translation(Vec3::new(0.0, -1.0, 0.0)) * Mat4::from_scale(Vec3::splat(10.0)),
+    );
+    // Back wall
+    builder.add_instance(
+        plane_id,
+        mat_wall,
+        Mat4::from_translation(Vec3::new(0.0, 5.0, -5.0))
+            * Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2)
+            * Mat4::from_scale(Vec3::splat(10.0)),
+    );
+
+    // 5. 多数の光源 (Grid状に配置)
+    let rows = 8;
+    let cols = 8;
+    let spacing = 1.0;
+    let light_radius = 0.05;
+    let emission_strength = 20.0;
+
+    for r in 0..rows {
+        for c in 0..cols {
+            let x = (c as f32 - cols as f32 / 2.0) * spacing;
+            let z = (r as f32 - rows as f32 / 2.0) * spacing;
+            let y = -0.9; // 少し床から浮かす
+
+            // 各ライトに別の色を割り当てる (虹色っぽく)
+            let hue = (r * cols + c) as f32 / (rows * cols) as f32;
+            let color = hsv_to_rgb(hue, 0.8, 1.0);
+            let emission = [color[0], color[1], color[2], emission_strength];
+
+            let mat_id = builder.add_material(
+                Material::new([color[0], color[1], color[2], 1.0])
+                    .light_index((r * cols + c) as i32)
+                    .texture(0),
+            );
+
+            // インスタンス(可視)
+            builder.add_instance(
+                sphere_id,
+                mat_id,
+                Mat4::from_translation(Vec3::new(x, y, z))
+                    * Mat4::from_scale(Vec3::splat(light_radius)),
+            );
+
+            // 光源データ
+            builder.add_sphere_light([x, y, z], light_radius, emission);
+        }
+    }
+
+    // 6. 受光部としてのオブジェクト
+    builder.add_instance(
+        cube_id,
+        mat_metal,
+        Mat4::from_translation(Vec3::new(0.0, -0.5, 0.0)) * Mat4::from_scale(Vec3::splat(0.5)),
+    );
+
+    builder.build(device, queue)
+}
+
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
+    let c = v * s;
+    let x = c * (1.0 - ((h * 6.0) % 2.0 - 1.0).abs());
+    let m = v - c;
+
+    let (r, g, b) = if h < 1.0 / 6.0 {
+        (c, x, 0.0)
+    } else if h < 2.0 / 6.0 {
+        (x, c, 0.0)
+    } else if h < 3.0 / 6.0 {
+        (0.0, c, x)
+    } else if h < 4.0 / 6.0 {
+        (0.0, x, c)
+    } else if h < 5.0 / 6.0 {
+        (x, 0.0, c)
+    } else {
+        (c, 0.0, x)
+    };
+
+    [r + m, g + m, b + m]
+}

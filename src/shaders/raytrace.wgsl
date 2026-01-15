@@ -176,64 +176,258 @@ struct HitInfo {
     t: f32,
 }
 
-// Material evaluation and NEE functions remain here
-struct ScatterResult {
-    dir: vec3f,
-    throughput_mult: vec3f,
-    absorbed: bool,
-    was_diffuse: bool,
+// =================================================================
+//   MATH & GGX HELPER FUNCTIONS
+// =================================================================
+
+// 正規直交基底を作る (法線 n を Z軸とする座標系)
+fn make_orthonormal_basis(n: vec3f) -> mat3x3f {
+    let sign = select(-1.0, 1.0, n.z >= 0.0);
+    let a = -1.0 / (sign + n.z);
+    let b = n.x * n.y * a;
+    let tangent = vec3f(1.0 + sign * n.x * n.x * a, sign * b, -sign * n.x);
+    let bitangent = vec3f(b, sign + n.y * n.y * a, -n.y);
+    return mat3x3f(tangent, bitangent, n);
 }
 
-fn evaluate_material(
-    r_dir: vec3f,
-    hit: HitInfo,
-    mat: Material,
-    base_color: vec3f
-) -> ScatterResult {
-    var res: ScatterResult;
-    res.absorbed = false;
-    res.was_diffuse = false;
+// Fresnel (Schlick)
+fn fresnel_schlick(f0: vec3f, v_dot_h: f32) -> vec3f {
+    return f0 + (1.0 - f0) * pow(clamp(1.0 - v_dot_h, 0.0, 1.0), 5.0);
+}
 
-    if mat.metallic > 0.01 { // Metal
-        let reflected = reflect(r_dir, hit.ffnormal);
-        res.dir = reflected + random_unit_vector() * mat.roughness;
-        res.absorbed = dot(res.dir, hit.ffnormal) <= 0.0;
-        res.throughput_mult = base_color;
-    } else if mat.ior > 1.01 || mat.ior < 0.99 { // Glass
+// NDF (GGX / Trowbridge-Reitz)
+fn ndf_ggx(n_dot_h: f32, roughness: f32) -> f32 {
+    let a = roughness * roughness;
+    let a2 = a * a;
+    let d = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
+    return a2 / (PI * d * d);
+}
+
+// Geometry (Smith / Schlick-GGX)
+fn geometry_schlick_ggx(n_dot_v: f32, k: f32) -> f32 {
+    return n_dot_v / (n_dot_v * (1.0 - k) + k);
+}
+
+fn geometry_smith(n_dot_l: f32, n_dot_v: f32, roughness: f32) -> f32 {
+    // Path Tracing (sample_bsdf) では k = alpha^2 / 2 を使用
+    let r = roughness;
+    let k = (r * r) / 2.0;
+    let ggx1 = geometry_schlick_ggx(n_dot_l, k);
+    let ggx2 = geometry_schlick_ggx(n_dot_v, k);
+    return ggx1 * ggx2;
+}
+
+// GGX VNDF Sampling (Visible Normal Distribution Function)
+// 視線方向 wo から見えるマイクロファセットの法線 wm をサンプリングする
+fn sample_ggx_vndf(wo: vec3f, roughness: f32, u: vec2f) -> vec3f {
+    let alpha = roughness * roughness;
+
+    // View vector to hemisphere configuration
+    let Vh = normalize(vec3f(alpha * wo.x, alpha * wo.y, wo.z));
+
+    // Orthonormal basis
+    let lensq = Vh.x * Vh.x + Vh.y * Vh.y;
+    let T1 = select(vec3f(1.0, 0.0, 0.0), vec3f(-Vh.y, Vh.x, 0.0) * inverseSqrt(lensq), lensq > 0.0);
+    let T2 = cross(Vh, T1);
+
+    // Parameterization
+    let r = sqrt(u.x);
+    let phi = 2.0 * PI * u.y;
+    let t1 = r * cos(phi);
+    let t2 = r * sin(phi);
+    let s = 0.5 * (1.0 + Vh.z);
+    let t2_lerp = (1.0 - s) * sqrt(1.0 - t1 * t1) + s * t2;
+
+    // Reprojection
+    let Nh = t1 * T1 + t2_lerp * T2 + sqrt(max(0.0, 1.0 - t1 * t1 - t2_lerp * t2_lerp)) * Vh;
+
+    // Back to ellipsoid configuration
+    let Ne = normalize(vec3f(alpha * Nh.x, alpha * Nh.y, max(0.0, Nh.z)));
+    return Ne;
+}
+
+// =================================================================
+//   BSDF & EVALUATION FUNCTIONS
+// =================================================================
+
+struct BsdfSample {
+    wi: vec3f,          // 次のレイの方向 (World Space)
+    pdf: f32,           // 確率密度 (Solid Angle)
+    weight: vec3f,      // throughput への寄与 (f * cos / pdf)
+    is_delta: bool,     // 鏡面反射など (NEE不可) かどうか
+}
+
+// 確率密度関数 (PDF) の評価
+fn eval_pdf(normal: vec3f, wi: vec3f, wo: vec3f, mat: Material) -> f32 {
+    let n_dot_l = dot(normal, wi);
+    let n_dot_v = dot(normal, wo);
+
+    // Metal (GGX)
+    if mat.metallic > 0.01 {
+        if n_dot_l <= 0.0 || n_dot_v <= 0.0 { return 0.0; }
+
+        let h = normalize(wi + wo);
+        let n_dot_h = max(dot(normal, h), 0.0);
+        let h_dot_v = max(dot(h, wo), 0.0);
+
+        let d = ndf_ggx(n_dot_h, mat.roughness);
+        // VNDF sampling PDF: p_wi = D * G1 / (4 * n.v)
+        // ※ここでは一般的な PDF = (D * n.h) / (4 * h.v) ではなく、VNDFのPDFを使います
+        let k = (mat.roughness * mat.roughness) / 2.0;
+        let g1 = geometry_schlick_ggx(n_dot_v, k);
+        return (d * g1) / (4.0 * n_dot_v);
+    }
+
+    // Glass / Specular (Delta) -> PDF is 0 for analytical evaluation
+    if mat.ior > 1.01 || mat.ior < 0.99 {
+        return 0.0;
+    }
+
+    // Lambert
+    return max(n_dot_l, 0.0) / PI;
+}
+
+// BSDF (BRDF) の評価値 f を返す (cos項は含まない定義)
+fn eval_bsdf(normal: vec3f, wi: vec3f, wo: vec3f, mat: Material, base_color: vec3f) -> vec3f {
+    let n_dot_l = dot(normal, wi);
+    let n_dot_v = dot(normal, wo);
+
+    // Metal (GGX)
+    if mat.metallic > 0.01 {
+        if n_dot_l <= 0.0 || n_dot_v <= 0.0 { return vec3f(0.0); }
+
+        let h = normalize(wi + wo);
+        let n_dot_h = max(dot(normal, h), 0.0);
+        let h_dot_v = max(dot(h, wo), 0.0);
+
+        let D = ndf_ggx(n_dot_h, mat.roughness);
+        let G = geometry_smith(n_dot_l, n_dot_v, mat.roughness);
+        let F = fresnel_schlick(base_color, h_dot_v); // Metal color is F0
+
+        // Cook-Torrance Specular BRDF: f = (D * F * G) / (4 * n.l * n.v)
+        let numerator = D * G * F;
+        let denominator = 4.0 * n_dot_l * n_dot_v;
+        return numerator / max(denominator, 0.001);
+    }
+
+    // Glass (Delta) -> Evaluate is 0
+    if mat.ior > 1.01 || mat.ior < 0.99 {
+        return vec3f(0.0);
+    }
+
+    // Lambert: f = c / PI
+    return base_color / PI;
+}
+
+fn sample_bsdf(
+    wo: vec3f,       // 視線方向 (-ray.dir)
+    hit: HitInfo,    // 衝突点情報
+    mat: Material,   // マテリアル
+    base_color: vec3f // テクスチャ適用後の色
+) -> BsdfSample {
+    var smp: BsdfSample;
+    smp.is_delta = false;
+
+    // --- Metal (GGX) ---
+    if mat.metallic > 0.01 {
+        // 1. 接空間へ変換
+        let tbn = make_orthonormal_basis(hit.ffnormal);
+        let wo_local = transpose(tbn) * wo; 
+        
+        // 2. VNDFサンプリング (法線を決める)
+        let r = vec2f(rand(), rand());
+        let wm_local = sample_ggx_vndf(wo_local, mat.roughness, r);
+        let wm = tbn * wm_local; 
+
+        // 3. 反射方向を決める
+        smp.wi = reflect(-wo, wm);
+        
+        // 幾何的なチェック
+        let n_dot_l = dot(hit.ffnormal, smp.wi);
+        let n_dot_v = dot(hit.ffnormal, wo);
+
+        if n_dot_l <= 0.0 || n_dot_v <= 0.0 {
+            smp.weight = vec3f(0.0);
+            smp.pdf = 0.0;
+            return smp;
+        }
+
+        smp.is_delta = false; // GGXはNEE可能（今回はOFFにしますが）
+        smp.pdf = eval_pdf(hit.ffnormal, smp.wi, wo, mat);
+
+        // F項 (フレネル: 色)
+        let F = fresnel_schlick(base_color, dot(wo, wm));
+        
+        // G1項 (遮蔽: 明るさ)
+        let k = (mat.roughness * mat.roughness) / 2.0;
+        let G1_l = geometry_schlick_ggx(n_dot_l, k);
+
+        smp.weight = F * G1_l;
+
+        return smp;
+    }
+
+    // --- Glass (Delta) ---
+    if mat.ior > 1.01 || mat.ior < 0.99 {
+        smp.is_delta = true;
+        smp.pdf = 0.0;
+
         let refraction_ratio = select(mat.ior, 1.0 / mat.ior, hit.front_face);
-        let unit_dir = normalize(r_dir);
-        let cos_theta = min(dot(-unit_dir, hit.ffnormal), 1.0);
+        let cos_theta = min(dot(wo, hit.ffnormal), 1.0);
         let sin_theta = sqrt(1.0 - cos_theta * cos_theta);
 
         if refraction_ratio * sin_theta > 1.0 || reflectance(cos_theta, refraction_ratio) > rand() {
-            res.dir = reflect(unit_dir, hit.ffnormal);
+            smp.wi = reflect(-wo, hit.ffnormal);
         } else {
-            res.dir = refract(unit_dir, hit.ffnormal, refraction_ratio);
+            smp.wi = refract(-wo, hit.ffnormal, refraction_ratio);
         }
-        res.throughput_mult = base_color;
-    } else { // Lambertian
-        res.dir = normalize(hit.ffnormal + random_unit_vector());
-        if length(res.dir) < 0.001 { res.dir = hit.ffnormal; }
-        res.throughput_mult = base_color;
-        res.was_diffuse = true;
+        smp.weight = base_color;
+        return smp;
     }
 
-    return res;
+    // --- Lambert (Diffuse) ---
+    smp.wi = normalize(hit.ffnormal + random_unit_vector());
+    if length(smp.wi) < 0.001 { smp.wi = hit.ffnormal; }
+
+    smp.is_delta = false;
+    let n_dot_l = max(dot(hit.ffnormal, smp.wi), 0.0);
+    smp.pdf = n_dot_l / PI;
+
+    if smp.pdf > 0.0 {
+        smp.weight = base_color;
+    } else {
+        smp.weight = vec3f(0.0);
+    }
+
+    return smp;
 }
 
-fn calculate_nee(pos: vec3f, ffnormal: vec3f, throughput: vec3f, base_color: vec3f) -> vec3f {
+// =================================================================
+//   NEE FUNCTION (UPDATED)
+// =================================================================
+
+fn calculate_nee(
+    pos: vec3f,
+    ffnormal: vec3f,
+    wo: vec3f,           // 視線方向 (-ray.dir)
+    throughput: vec3f,
+    mat: Material,       // マテリアル
+    base_color: vec3f
+) -> vec3f {
     if camera.num_lights == 0u { return vec3f(0.0); }
 
     let num_f = f32(camera.num_lights);
     let ls = sample_light(u32(rand() * num_f));
+
     let to_light = ls.pos - pos;
     let dist_sq = dot(to_light, to_light);
     let dist = sqrt(dist_sq);
-    let L = to_light / dist;
+    let L = to_light / dist; // wi
 
     let n_dot_l = max(dot(ffnormal, L), 0.0);
     let l_dot_n = max(dot(-L, ls.normal), 0.0);
 
+    // 表面がライトを向いていて、かつライトの表面が見えている場合
     if n_dot_l > 0.0 && l_dot_n > 0.0 {
         let offset_pos = pos + ffnormal * 0.001;
         var shadow_rq: ray_query;
@@ -241,9 +435,20 @@ fn calculate_nee(pos: vec3f, ffnormal: vec3f, throughput: vec3f, base_color: vec
         rayQueryProceed(&shadow_rq);
 
         if rayQueryGetCommittedIntersection(&shadow_rq).kind == 0u {
+            // 面積測度 -> 立体角測度
             let pdf_solid = ls.pdf * (dist_sq / l_dot_n);
-            let weight = 1.0 / ((1.0 / num_f) * pdf_solid);
-            return ls.emission.rgb * ls.emission.a * (base_color / PI) * n_dot_l * weight * throughput;
+            let pdf_nee = (1.0 / num_f) * pdf_solid;
+
+            // BSDF (BRDF) の評価
+            let f = eval_bsdf(ffnormal, L, wo, mat, base_color);
+
+            // MIS Weight (Balance Heuristic)
+            let pdf_bsdf = eval_pdf(ffnormal, L, wo, mat);
+            let weight = pdf_nee / (pdf_nee + pdf_bsdf);
+
+            // Contribution = Le * f * cos * weight / pdf_nee
+            // (1.0/pdf_nee) と pdf_nee で約分できますが、MISの形を残しています
+            return ls.emission.rgb * ls.emission.a * f * n_dot_l * weight * (throughput / pdf_nee);
         }
     }
     return vec3f(0.0);
@@ -311,20 +516,30 @@ fn ray_color(r_in: Ray) -> vec3f {
         let base_color = (mat.base_color * tex_color).rgb;
 
         // 3. NEE
-        if mat.metallic <= 0.01 && (mat.ior <= 1.01 && mat.ior >= 0.99) {
-            accumulated_color += calculate_nee(hit.pos, hit.ffnormal, throughput, base_color);
+        // 修正: 鏡(Glass) または 金属(Metal) は NEE を行わない
+        // 金属は NEE でヒットする確率が低く、BSDFサンプリング(反射)に任せたほうが品質が良いため
+        let is_specular_delta = (mat.ior > 1.01 || mat.ior < 0.99) || (mat.metallic > 0.01);
+
+        if !is_specular_delta {
+            // Lambert (非金属) のみここで光源を探す
+            accumulated_color += calculate_nee(hit.pos, hit.ffnormal, -r.dir, throughput, mat, base_color);
             previous_was_diffuse = true;
         } else {
+            // 金属やガラスはここで光源を探さず、次の sample_bsdf でレイを飛ばして直接当てる
             previous_was_diffuse = false;
         }
 
         // 4. Scattering
-        let sc = evaluate_material(r.dir, hit, mat, base_color);
-        if sc.absorbed { break; }
+        let sc = sample_bsdf(-r.dir, hit, mat, base_color); // wo = -r.dir
 
-        throughput *= sc.throughput_mult;
+        // 吸収判定: ウェイトが真っ黒(0,0,0)なら、これ以上計算しても意味がないので終了
+        if sc.weight.x <= 0.0 && sc.weight.y <= 0.0 && sc.weight.z <= 0.0 { break; }
+
+        // スループットとレイの更新
+        throughput *= sc.weight;
+
         r.origin = hit.pos;
-        r.dir = sc.dir;
+        r.dir = sc.wi;
 
         // Russian Roulette
         if i > 3u {

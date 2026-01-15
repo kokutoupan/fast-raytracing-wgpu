@@ -174,7 +174,7 @@ impl State {
         }
 
         if self.screenshot_requested {
-            self.save_screenshot(&self.renderer.post_processed_texture);
+            self.save_screenshot(&self.renderer.targets.post_processed_texture);
             self.screenshot_requested = false;
         }
 

@@ -447,24 +447,7 @@ fn sample_bsdf(
 //   NEE FUNCTION (UPDATED)
 // =================================================================
 
-fn calculate_nee(
-    pos: vec3f,
-    ffnormal: vec3f,
-    wo: vec3f,           // 視線方向 (-ray.dir)
-    throughput: vec3f,
-    mat: Material,       // マテリアル
-    base_color: vec3f,
-    pixel_idx: vec2u,
-    depth: u32,
-) -> vec3f {
-    if camera.num_lights == 0u { return vec3f(0.0); }
-
-    let num_lights = camera.num_lights;
-    let num_f = f32(num_lights);
-
-
-    // --- Phase 1: RIS (候補選抜) ---
-    // 32個の候補から「最強のライト」を1つ決める
+fn run_ris_candidate_search(pos: vec3f, ffnormal: vec3f, num_lights: u32) -> Reservoir {
     const CANDIDATE_COUNT = 16u;
     var r = init_reservoir();
 
@@ -481,31 +464,45 @@ fn calculate_nee(
 
         update_reservoir(&r, light_idx, w);
     }
+    return r;
+}
 
-    if depth == 0u {
-        let size = textureDimensions(out_tex);
-        let prev_r = reservoirs_in[pixel_idx.y * size.x + pixel_idx.x];
+fn apply_temporal_reuse(r: ptr<function, Reservoir>, pos: vec3f, ffnormal: vec3f, pixel_idx: vec2u) {
+    let size = textureDimensions(out_tex);
+    let prev_r = reservoirs_in[pixel_idx.y * size.x + pixel_idx.x];
 
-        let p_hat_prev = evaluate_target(prev_r.y, pos, ffnormal);
-        let w_prev = p_hat_prev;
+    let p_hat_prev = evaluate_target(prev_r.y, pos, ffnormal);
 
-        if prev_r.M > 0u && p_hat_prev > 0.0 {
-            let limit_M = min(prev_r.M, 20u);
-            update_reservoir(&r, prev_r.y, p_hat_prev * prev_r.W * f32(limit_M));
-            r.M += (limit_M - 1u);
-        }
-
-        // --- 結果を保存 ---
-        // 次のフレームのために、現在の最良結果を保存
-        // Wを計算してから保存
-        let p_hat_curr = evaluate_target(r.y, pos, ffnormal);
-        r.W = 0.0;
-        if p_hat_curr > 0.0 {
-            r.W = (r.w_sum / f32(r.M)) / p_hat_curr;
-        }
-        reservoirs_out[pixel_idx.y * size.x + pixel_idx.x] = r;
+    if prev_r.M > 0u && p_hat_prev > 0.0 {
+        let limit_M = min(prev_r.M, 20u);
+        update_reservoir(r, prev_r.y, p_hat_prev * prev_r.W * f32(limit_M));
+        (*r).M += (limit_M - 1u);
     }
+}
 
+fn store_reservoir(r_in: Reservoir, pos: vec3f, ffnormal: vec3f, pixel_idx: vec2u) {
+    let size = textureDimensions(out_tex);
+    var r = r_in;
+
+    let p_hat_curr = evaluate_target(r.y, pos, ffnormal);
+    r.W = 0.0;
+    if p_hat_curr > 0.0 {
+        r.W = (r.w_sum / f32(r.M)) / p_hat_curr;
+    }
+    reservoirs_out[pixel_idx.y * size.x + pixel_idx.x] = r;
+}
+
+fn evaluate_reservoir_lighting(
+    r_in: Reservoir,
+    pos: vec3f,
+    ffnormal: vec3f,
+    wo: vec3f,
+    throughput: vec3f,
+    mat: Material,
+    base_color: vec3f,
+    num_lights: u32
+) -> vec3f {
+    var r = r_in;
     // --- Phase 2: Shading (本番計算) ---
     // 選ばれたエース級ライト(r.y)に対してのみ、重いシャドウレイを飛ばす
     let selected_light_id = r.y;
@@ -515,7 +512,7 @@ fn calculate_nee(
 
     // RIS Weight: W = (1/M) * (sum(w) / p_hat)
     // p_source = 1/N なので、最後に N (= num_f) を掛ける
-    r.W = r.w_sum / (f32(r.M) * p_hat_selected) * num_f;
+    r.W = r.w_sum / (f32(r.M) * p_hat_selected) * f32(num_lights);
 
     let ls = sample_light(selected_light_id);
 
@@ -539,7 +536,7 @@ fn calculate_nee(
 
             // BSDF (BRDF) の評価
             let f = eval_bsdf(ffnormal, L, wo, mat, base_color);
-            let light_area = 1.0 / ls.pdf; // ★これを追加！
+            let light_area = 1.0 / ls.pdf;
 
             // ReSTIR DI Estimator:
             // L = f * Le * G * W
@@ -550,6 +547,31 @@ fn calculate_nee(
         }
     }
     return vec3f(0.0);
+}
+
+fn calculate_nee(
+    pos: vec3f,
+    ffnormal: vec3f,
+    wo: vec3f,           // 視線方向 (-ray.dir)
+    throughput: vec3f,
+    mat: Material,       // マテリアル
+    base_color: vec3f,
+    pixel_idx: vec2u,
+    depth: u32,
+) -> vec3f {
+    if camera.num_lights == 0u { return vec3f(0.0); }
+
+    // --- Phase 1: RIS (候補選抜) ---
+    var r = run_ris_candidate_search(pos, ffnormal, camera.num_lights);
+
+    // --- Temporal Reuse ---
+    if depth == 0u {
+        apply_temporal_reuse(&r, pos, ffnormal, pixel_idx);
+        store_reservoir(r, pos, ffnormal, pixel_idx);
+    }
+
+    // --- Phase 2: Shading (本番計算) ---
+    return evaluate_reservoir_lighting(r, pos, ffnormal, wo, throughput, mat, base_color, camera.num_lights);
 }
 
 fn ray_color(r_in: Ray, pixel_idx: vec2u) -> vec3f {

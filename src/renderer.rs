@@ -21,6 +21,75 @@ pub struct BlitParams {
 }
 
 #[allow(dead_code)]
+pub struct RenderTargets {
+    pub width: u32,
+    pub height: u32,
+
+    pub raw_raytrace_texture: wgpu::Texture,
+    pub post_processed_texture: wgpu::Texture,
+    pub accumulation_buffer: wgpu::Buffer,
+
+    // Views (convenience)
+    pub raw_view: wgpu::TextureView,
+    pub pp_view: wgpu::TextureView,
+}
+
+impl RenderTargets {
+    pub fn new(ctx: &WgpuContext, width: u32, height: u32) -> Self {
+        let accumulation_buffer = create_buffer(
+            &ctx.device,
+            "Accumulation Buffer",
+            (width * height * 16) as u64,
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        );
+
+        let raw_raytrace_texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Raw Raytrace Texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba32Float,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let raw_view = raw_raytrace_texture.create_view(&Default::default());
+
+        let post_processed_texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Post Processed Texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let pp_view = post_processed_texture.create_view(&Default::default());
+
+        Self {
+            width,
+            height,
+            raw_raytrace_texture,
+            post_processed_texture,
+            accumulation_buffer,
+            raw_view,
+            pp_view,
+        }
+    }
+}
+
+#[allow(dead_code)]
 pub struct Renderer {
     pub render_width: u32,
     pub render_height: u32,
@@ -32,10 +101,10 @@ pub struct Renderer {
     post_pass: PostPass,
     blit_pass: BlitPass,
 
-    // Shared Resources
-    pub raw_raytrace_texture: wgpu::Texture,
-    pub post_processed_texture: wgpu::Texture,
-    pub accumulation_buffer: wgpu::Buffer,
+    // Render Targets (Screen Size Dependent)
+    pub targets: RenderTargets,
+
+    // Shared Resources (Screen Size Independent)
     pub post_params_buffer: wgpu::Buffer,
     pub blit_params_buffer: wgpu::Buffer,
     pub sampler: wgpu::Sampler,
@@ -56,47 +125,8 @@ impl Renderer {
         render_width: u32,
         render_height: u32,
     ) -> Self {
-        // --- Shared Resources ---
-        let accumulation_buffer = create_buffer(
-            &ctx.device,
-            "Accumulation Buffer",
-            (render_width * render_height * 16) as u64,
-            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        );
-
-        let raw_raytrace_texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Raw Raytrace Texture"),
-            size: wgpu::Extent3d {
-                width: render_width,
-                height: render_height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba32Float,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let raw_view = raw_raytrace_texture.create_view(&Default::default());
-
-        let post_processed_texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Post Processed Texture"),
-            size: wgpu::Extent3d {
-                width: render_width,
-                height: render_height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::STORAGE_BINDING
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let pp_view = post_processed_texture.create_view(&Default::default());
+        // --- Render Targets ---
+        let targets = RenderTargets::new(ctx, render_width, render_height);
 
         let post_params_buffer = create_buffer_init(
             &ctx.device,
@@ -204,7 +234,7 @@ impl Renderer {
             ctx,
             scene_resources,
             camera_buffer,
-            &raw_view,
+            &targets.raw_view,
             &texture_view,
             &sampler,
             render_width,
@@ -213,13 +243,13 @@ impl Renderer {
 
         let post_pass = PostPass::new(
             ctx,
-            &raw_view,
-            &accumulation_buffer,
-            &pp_view,
+            &targets.raw_view,
+            &targets.accumulation_buffer,
+            &targets.pp_view,
             &post_params_buffer,
         );
 
-        let blit_pass = BlitPass::new(ctx, &pp_view, &sampler, &blit_params_buffer);
+        let blit_pass = BlitPass::new(ctx, &targets.pp_view, &sampler, &blit_params_buffer);
 
         Self {
             render_width,
@@ -229,9 +259,7 @@ impl Renderer {
             raytrace_pass,
             post_pass,
             blit_pass,
-            raw_raytrace_texture,
-            post_processed_texture,
-            accumulation_buffer,
+            targets,
             post_params_buffer,
             blit_params_buffer,
             sampler,

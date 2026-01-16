@@ -358,6 +358,7 @@ impl Renderer {
         view: &wgpu::TextureView,
         camera_buffer: &wgpu::Buffer,
         light_buffer: &wgpu::Buffer,
+        material_buffer: &wgpu::Buffer,
         tlas: &wgpu::Tlas,
         light_count: u32,
     ) -> Result<(), wgpu::SurfaceError> {
@@ -442,6 +443,7 @@ impl Renderer {
                 light_buffer,
                 current_reservoir_buffer,
                 tlas,
+                material_buffer,
             );
 
             // 3. Post Pass (Tonemap + Accumulate?)

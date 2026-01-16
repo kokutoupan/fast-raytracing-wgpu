@@ -102,6 +102,17 @@ impl ShadePass {
                             },
                             count: None,
                         },
+                        // 8: Materials
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 8,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
                     ],
                 });
 
@@ -142,8 +153,9 @@ impl ShadePass {
         out_view: &wgpu::TextureView,
         camera_buffer: &wgpu::Buffer,
         light_buffer: &wgpu::Buffer,
-        reservoir_buffer: &wgpu::Buffer,
+        current_reservoirs: &wgpu::Buffer,
         tlas: &wgpu::Tlas,
+        material_buffer: &wgpu::Buffer,
     ) {
         let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Shade Bind Group"),
@@ -175,11 +187,15 @@ impl ShadePass {
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
-                    resource: reservoir_buffer.as_entire_binding(),
+                    resource: current_reservoirs.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 7,
                     resource: wgpu::BindingResource::AccelerationStructure(tlas),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: material_buffer.as_entire_binding(),
                 },
             ],
         });

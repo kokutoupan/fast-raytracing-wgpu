@@ -131,7 +131,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
     // --- Phase 1: Initial Candidate Search (RIS) ---
     // Generate M candidates
-    let M_candidates = 4u; // Number of candidates per pixel
+    let M_candidates = 8u; // Number of candidates per pixel
     for (var i = 0u; i < M_candidates; i++) {
         let rnd_light = simple_rand(seed + i * 1143u);
         let light_idx = min(u32(rnd_light * f32(num_lights)), num_lights - 1u);

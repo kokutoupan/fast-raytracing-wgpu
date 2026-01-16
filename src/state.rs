@@ -47,8 +47,8 @@ impl State {
         let ctx = WgpuContext::new(window.clone()).await;
 
         // 2. シーン構築
-        let scene_resources = scene::create_restir_scene(&ctx.device, &ctx.queue);
-        // let scene_resources = scene::create_cornell_box(&ctx.device, &ctx.queue);
+        // let scene_resources = scene::create_restir_scene(&ctx.device, &ctx.queue);
+        let scene_resources = scene::create_cornell_box(&ctx.device, &ctx.queue);
 
         // 3. カメラ初期化 (最初はデフォルトのアスペクト比で初期化)
         let camera_controller = CameraController::new();
@@ -165,6 +165,7 @@ impl State {
             &view,
             &self.camera_buffer,
             &self.scene_resources.light_buffer,
+            &self.scene_resources.material_buffer,
             &self.scene_resources.tlas,
             self.scene_resources.num_lights,
         )?;

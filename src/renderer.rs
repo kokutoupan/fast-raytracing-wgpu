@@ -1,4 +1,4 @@
-use crate::passes::*;
+use crate::passes::{BlitPass, GBufferPass, PostPass, RaytracePass};
 use crate::scene;
 use crate::wgpu_ctx::WgpuContext;
 use crate::wgpu_utils::*;
@@ -29,9 +29,19 @@ pub struct RenderTargets {
     pub post_processed_texture: wgpu::Texture,
     pub accumulation_buffer: wgpu::Buffer,
 
+    // --- G-Buffer Textures ---
+    pub gbuffer_pos: wgpu::Texture, // World Position (xyz) + Linear Depth (w)
+    pub gbuffer_normal: wgpu::Texture, // World Normal (xyz) + Roughness (w)
+    pub gbuffer_albedo: wgpu::Texture, // Albedo (rgb) + Metallic/MatID (w)
+
     // Views (convenience)
     pub raw_view: wgpu::TextureView,
     pub pp_view: wgpu::TextureView,
+
+    // Views (Binding用)
+    pub gbuffer_pos_view: wgpu::TextureView,
+    pub gbuffer_normal_view: wgpu::TextureView,
+    pub gbuffer_albedo_view: wgpu::TextureView,
 }
 
 impl RenderTargets {
@@ -54,7 +64,9 @@ impl RenderTargets {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba32Float,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
         let raw_view = raw_raytrace_texture.create_view(&Default::default());
@@ -72,9 +84,41 @@ impl RenderTargets {
             format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::STORAGE_BINDING
                 | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
+
+        // --- Helper for creating storage textures ---
+        let create_storage_tex = |label: &str, format: wgpu::TextureFormat| {
+            ctx.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::STORAGE_BINDING
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            })
+        };
+
+        // G-Buffer Textures
+        let gbuffer_pos = create_storage_tex("GBuffer Position", wgpu::TextureFormat::Rgba32Float);
+        let gbuffer_normal = create_storage_tex("GBuffer Normal", wgpu::TextureFormat::Rgba32Float);
+        let gbuffer_albedo = create_storage_tex("GBuffer Albedo", wgpu::TextureFormat::Rgba8Unorm);
+
+        // Views
+        let gbuffer_pos_view = gbuffer_pos.create_view(&Default::default());
+        let gbuffer_normal_view = gbuffer_normal.create_view(&Default::default());
+        let gbuffer_albedo_view = gbuffer_albedo.create_view(&Default::default());
+
         let pp_view = post_processed_texture.create_view(&Default::default());
 
         Self {
@@ -83,8 +127,14 @@ impl RenderTargets {
             raw_raytrace_texture,
             post_processed_texture,
             accumulation_buffer,
+            gbuffer_pos,
+            gbuffer_normal,
+            gbuffer_albedo,
             raw_view,
             pp_view,
+            gbuffer_pos_view,
+            gbuffer_normal_view,
+            gbuffer_albedo_view,
         }
     }
 }
@@ -97,6 +147,7 @@ pub struct Renderer {
     pub window_height: u32,
 
     // Passes
+    gbuffer_pass: GBufferPass,
     raytrace_pass: RaytracePass,
     post_pass: PostPass,
     blit_pass: BlitPass,
@@ -230,6 +281,15 @@ impl Renderer {
         });
 
         // --- Passes ---
+        let gbuffer_pass = GBufferPass::new(
+            ctx,
+            scene_resources,
+            camera_buffer,
+            &targets.gbuffer_pos_view,
+            &targets.gbuffer_normal_view,
+            &targets.gbuffer_albedo_view,
+        );
+
         let raytrace_pass = RaytracePass::new(
             ctx,
             scene_resources,
@@ -256,6 +316,7 @@ impl Renderer {
             render_height,
             window_width: ctx.config.width,
             window_height: ctx.config.height,
+            gbuffer_pass,
             raytrace_pass,
             post_pass,
             blit_pass,
@@ -318,17 +379,78 @@ impl Renderer {
             }]),
         );
 
-        // 1. Ray Tracing Pass
-        self.raytrace_pass.execute(
-            &mut encoder,
-            self.render_width,
-            self.render_height,
-            self.frame_count,
-        );
-
-        // 2. Post Pass
-        self.post_pass
+        // 0. G-Buffer Pass
+        self.gbuffer_pass
             .execute(&mut encoder, self.render_width, self.render_height);
+
+        // ---------------------------------------------------------------------
+        // DEBUG: G-Buffer Visualization
+        // 0: Raytrace (Default), 1: Pos (Float), 2: Normal (Float), 3: Albedo (Unorm)
+        let debug_mode = 0;
+
+        if debug_mode == 0 {
+            // 1. Ray Tracing Pass
+            self.raytrace_pass.execute(
+                &mut encoder,
+                self.render_width,
+                self.render_height,
+                self.frame_count,
+            );
+
+            // 2. Post Pass
+            self.post_pass
+                .execute(&mut encoder, self.render_width, self.render_height);
+        } else if debug_mode == 1 || debug_mode == 2 {
+            // Visualize Float Texture (Pos / Normal) -> PostPass (Tonemap)
+            let src_tex = if debug_mode == 1 {
+                &self.targets.gbuffer_pos
+            } else {
+                &self.targets.gbuffer_normal
+            };
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: src_tex,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.targets.raw_raytrace_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: self.render_width,
+                    height: self.render_height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            self.post_pass
+                .execute(&mut encoder, self.render_width, self.render_height);
+        } else {
+            // Visualize Albedo (Unorm) -> Skip PostPass
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.targets.gbuffer_albedo,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.targets.post_processed_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: self.render_width,
+                    height: self.render_height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        // ---------------------------------------------------------------------
 
         // 3. Blit Pass
         self.blit_pass.execute(&mut encoder, view);

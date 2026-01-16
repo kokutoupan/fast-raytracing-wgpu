@@ -2,9 +2,10 @@ enable wgpu_ray_query;
 
 // --- Structures (raytrace.wgslと同じ) ---
 struct Camera {
+    view_proj: array<vec4f, 4>,
     view_inverse: array<vec4f, 4>,
     proj_inverse: array<vec4f, 4>,
-    view_proj: array<vec4f, 4>,
+    view_pos: vec4f,
     prev_view_proj: array<vec4f, 4>,
     frame_count: u32,
     num_lights: u32,
@@ -135,9 +136,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let motion = prev_uv - curr_uv;
 
     // 4. Store G-Buffer
-    // Pos.w に Linear Depth または Material ID を入れると便利
+    // Pos.w に Material ID を入れる (User Request)
     let coord = vec2<i32>(id.xy);
-    textureStore(out_pos, coord, vec4f(pos, committed.t)); 
+    textureStore(out_pos, coord, vec4f(pos, f32(mat_id))); 
     // Normal.w に Roughness
     textureStore(out_normal, coord, vec4f(ffnormal, mat.roughness));
     // Albedo.w に Metallic

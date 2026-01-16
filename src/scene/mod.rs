@@ -110,7 +110,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
         Mat4::from_translation(Vec3::new(0.0, 0.99, 0.0))
             * Mat4::from_rotation_x(std::f32::consts::PI)
             * Mat4::from_scale(Vec3::splat(0.5)),
-        0x2,
+        0x1,
     );
     // Main Light:Light info
     builder.add_quad_light(
@@ -134,7 +134,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
         sphere_id,
         mat_sphere_light,
         Mat4::from_translation(crystal_pos) * Mat4::from_scale(Vec3::splat(0.1)),
-        0x2,
+        0x1,
     );
     // 球体光源の情報
     builder.add_sphere_light(

@@ -113,6 +113,39 @@ impl ShadePass {
                             },
                             count: None,
                         },
+                        // 9: Vertices
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 9,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        // 10: Indices
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 10,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        // 11: MeshInfos
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 11,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
                     ],
                 });
 
@@ -156,6 +189,9 @@ impl ShadePass {
         current_reservoirs: &wgpu::Buffer,
         tlas: &wgpu::Tlas,
         material_buffer: &wgpu::Buffer,
+        vertex_buffer: &wgpu::Buffer,
+        index_buffer: &wgpu::Buffer,
+        mesh_info_buffer: &wgpu::Buffer,
     ) {
         let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Shade Bind Group"),
@@ -196,6 +232,18 @@ impl ShadePass {
                 wgpu::BindGroupEntry {
                     binding: 8,
                     resource: material_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: vertex_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: index_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: mesh_info_buffer.as_entire_binding(),
                 },
             ],
         });

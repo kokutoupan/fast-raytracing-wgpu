@@ -4,13 +4,14 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CameraUniform {
+    pub view_proj: [[f32; 4]; 4],
     pub view_inverse: [[f32; 4]; 4],
     pub proj_inverse: [[f32; 4]; 4],
-    pub view_proj: [[f32; 4]; 4], // 64 bytes (追加: 現在のView * Proj)
-    pub prev_view_proj: [[f32; 4]; 4], // 64 bytes (追加: 1フレーム前のView * Proj)
+    pub view_pos: [f32; 4],
+    pub prev_view_proj: [[f32; 4]; 4],
     pub frame_count: u32,
     pub num_lights: u32,
-    pub _padding: [u32; 2], // 16バイトアライメントのためのパディング
+    pub _padding: [u32; 2],
 }
 
 pub struct CameraController {
@@ -197,9 +198,10 @@ impl CameraController {
         };
 
         CameraUniform {
+            view_proj: view_proj.to_cols_array_2d(),
             view_inverse: view.inverse().to_cols_array_2d(),
             proj_inverse: proj.inverse().to_cols_array_2d(),
-            view_proj: view_proj.to_cols_array_2d(),
+            view_pos: [self.position.x, self.position.y, self.position.z, 1.0],
             prev_view_proj: prev_view_proj.to_cols_array_2d(),
             frame_count,
             num_lights,

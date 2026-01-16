@@ -34,6 +34,8 @@ struct Camera {
     proj_inv: mat4x4f,
     view_pos: vec4f,
     prev_view_proj: mat4x4f,
+    frame_count: u32,
+    num_lights: u32,
 }
 
 // --- Bindings ---

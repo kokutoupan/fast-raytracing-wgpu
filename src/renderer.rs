@@ -359,6 +359,9 @@ impl Renderer {
         camera_buffer: &wgpu::Buffer,
         light_buffer: &wgpu::Buffer,
         material_buffer: &wgpu::Buffer,
+        vertex_buffer: &wgpu::Buffer,
+        index_buffer: &wgpu::Buffer,
+        mesh_info_buffer: &wgpu::Buffer,
         tlas: &wgpu::Tlas,
         light_count: u32,
     ) -> Result<(), wgpu::SurfaceError> {
@@ -423,6 +426,10 @@ impl Renderer {
             // cpass.set_bind_group(1, &self.bind_groups[(frame_count % 2)], ...);
             // If frame % 2 == 0 (Ping BG): Binding 1 is Buf[1]. So Output is Buf[1].
             // If frame % 2 == 1 (Pong BG): Binding 1 is Buf[0]. So Output is Buf[0].
+            // Wait, logic check:
+            // Ping (Frame 0): Prev=0, Curr=1. Output=1.
+            // Pong (Frame 1): Prev=1, Curr=0. Output=0.
+            // Correct.
             let current_reservoir_buffer = if self.frame_count % 2 == 0 {
                 &self.restir_pass.reservoir_buffers[1]
             } else {
@@ -444,6 +451,9 @@ impl Renderer {
                 current_reservoir_buffer,
                 tlas,
                 material_buffer,
+                vertex_buffer,
+                index_buffer,
+                mesh_info_buffer,
             );
 
             // 3. Post Pass (Tonemap + Accumulate?)

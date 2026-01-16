@@ -98,7 +98,7 @@ impl SceneBuilder {
         let instance_id = (mesh_id << 16) | mat_id;
 
         let instance =
-            wgpu::TlasInstance::new(blas, affine[..12].try_into().unwrap(), instance_id, mask);
+            wgpu::TlasInstance::new(blas, affine[..12].try_into().unwrap(), instance_id, 0xff);
         self.instances.push(Some(instance));
     }
 

@@ -10,9 +10,10 @@ const PI = 3.14159265359;
 
 // --- 構造体定義 ---
 struct Camera {
+    view_proj: array<vec4f, 4>,
     view_inverse: array<vec4f, 4>,
     proj_inverse: array<vec4f, 4>,
-    view_proj: array<vec4f, 4>,
+    view_pos: vec4f,
     prev_view_proj: array<vec4f, 4>,
     frame_count: u32,
     num_lights: u32,

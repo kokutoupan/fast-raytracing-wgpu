@@ -81,18 +81,29 @@ fn tea(v0: u32, v1: u32) -> u32 {
 
 fn is_valid_neighbor(
     curr_pos: vec3f, curr_normal: vec3f, curr_mat: u32,
-    prev_pos: vec3f, prev_normal: vec3f, prev_mat: u32
+    prev_pos: vec3f, prev_normal: vec3f, prev_mat: u32,
+    camera_pos: vec3f,
 ) -> bool {
     // 1. マテリアルIDが違うなら別人
     if curr_mat != prev_mat { return false; }
 
-    // 2. 位置が離れすぎていたらNG
-    let dist = dot(curr_pos - prev_pos, curr_pos - prev_pos);
-    if dist > 0.05 { return false; }
-
-    // 3. 法線の向きが違いすぎたらNG
+    // 2. 法線の向きが違いすぎたらNG
     if dot(curr_normal, prev_normal) < 0.9 { return false; }
 
+    // 3. 位置が離れすぎていたらNG
+    let dist_diff_sq = dot(curr_pos - prev_pos, curr_pos - prev_pos);
+
+    // カメラからその点までの距離
+    let dist_to_camera_sq = dot(curr_pos - camera_pos, curr_pos - camera_pos);
+
+    // 許容誤差を「カメラ距離の 2%」などに設定
+    // シーンのスケールに合わせて 0.01 ~ 0.05 くらいで調整してください
+    let threshold_ratio = 0.03; 
+    
+    // 最低保証値 (0.01) を入れておくと、至近距離で厳しすぎるのを防げます
+    let threshold = max(0.01, dist_to_camera_sq * threshold_ratio);
+
+    if dist_diff_sq > threshold { return false; }
     return true;
 }
 
@@ -195,7 +206,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
         let prev_mat_id = bitcast<u32>(prev_pos_data.w);
 
-        if is_valid_neighbor(pos, normal, u32(pos_w.w + 0.5), prev_pos_data.xyz, prev_normal_data.xyz, prev_mat_id) {
+        if is_valid_neighbor(pos, normal, u32(pos_w.w + 0.5), prev_pos_data.xyz, prev_normal_data.xyz, prev_mat_id, camera.view_pos.xyz) {
             // ★合格！過去のReservoirをマージ
             var prev_r = prev_reservoirs[prev_pixel_idx];
             

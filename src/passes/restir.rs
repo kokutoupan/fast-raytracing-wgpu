@@ -25,8 +25,8 @@ impl Reservoir {
 pub struct RestirPass {
     pub pipeline: wgpu::ComputePipeline,
     pub reservoir_buffers: [wgpu::Buffer; 2],
-    pub bind_groups: [wgpu::BindGroup; 2],
-    pub bind_group0: wgpu::BindGroup,
+    pub bind_groups0: [wgpu::BindGroup; 2],
+    pub bind_groups1: [wgpu::BindGroup; 2],
     pub scene_info_buffer: wgpu::Buffer,
 }
 
@@ -44,8 +44,8 @@ impl RestirPass {
         ctx: &WgpuContext,
         scene_resources: &scene::SceneResources,
         camera_buffer: &wgpu::Buffer,
-        gbuffer_pos: &wgpu::TextureView,
-        gbuffer_normal: &wgpu::TextureView,
+        gbuffer_pos: &[wgpu::TextureView; 2],
+        gbuffer_normal: &[wgpu::TextureView; 2],
         gbuffer_albedo: &wgpu::TextureView,
         gbuffer_motion: &wgpu::TextureView,
         render_width: u32,
@@ -138,6 +138,28 @@ impl RestirPass {
                         },
                         count: None,
                     },
+                    // 7: Prev Pos
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    // 8: Prev Normal
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 8,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -225,8 +247,8 @@ impl RestirPass {
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
 
-        // Bind Groups
-        let create_bg = |label: &str, prev: &wgpu::Buffer, curr: &wgpu::Buffer| {
+        // Bind Group 1 Ping-Pong
+        let create_bg1 = |label: &str, prev: &wgpu::Buffer, curr: &wgpu::Buffer| {
             ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(label),
                 layout: &bgl1,
@@ -243,79 +265,97 @@ impl RestirPass {
             })
         };
 
-        let bg1_ping = create_bg(
-            "Restir BG1 Ping",
+        let bg1_0 = create_bg1(
+            "Restir BG1 (0->1)",
             &reservoir_buffers[0],
             &reservoir_buffers[1],
-        );
-        let bg1_pong = create_bg(
-            "Restir BG1 Pong",
+        ); // Read 0, Write 1
+        let bg1_1 = create_bg1(
+            "Restir BG1 (1->0)",
             &reservoir_buffers[1],
             &reservoir_buffers[0],
+        ); // Read 1, Write 0
+
+        // Bind Group 0 Ping-Pong (G-Buffer)
+        let create_bg0 = |label: &str,
+                          curr_pos: &wgpu::TextureView,
+                          curr_normal: &wgpu::TextureView,
+                          prev_pos: &wgpu::TextureView,
+                          prev_normal: &wgpu::TextureView| {
+            ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &bgl0,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(curr_pos),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(curr_normal),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(gbuffer_albedo),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(gbuffer_motion),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: camera_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: scene_resources.light_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: scene_info_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: wgpu::BindingResource::TextureView(prev_pos),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: wgpu::BindingResource::TextureView(prev_normal),
+                    },
+                ],
+            })
+        };
+
+        // Frame 0 logic: Write to Gbuffer 0.
+        // Restir needs Curr=0, Prev=1.
+        let bg0_0 = create_bg0(
+            "Restir BG0 (Curr=0)",
+            &gbuffer_pos[0],
+            &gbuffer_normal[0],
+            &gbuffer_pos[1],
+            &gbuffer_normal[1],
         );
 
-        // Common BG0 (will need to recreate if Gbuffer changes? No, views are stable unless resize)
-        let bg0 = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Restir BG0"),
-            layout: &bgl0,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(gbuffer_pos),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(gbuffer_normal),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(gbuffer_albedo),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(gbuffer_motion),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: camera_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: scene_resources.light_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: scene_info_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        // We store BG0 separately or just one? One BG0 is enough.
-        // But we need 2 BG1s (ping pong).
-        // Let's store them.
-        // Wait, `bind_groups` in struct is [BindGroup; 2].
-        // I should probably store BG0 in struct too, OR recreate it.
-        // But struct definition has `bind_groups: [BindGroup; 2]`.
-        // Let's redefine struct to hold what we need.
-        // Actually, let's keep it simple: `bind_groups` hold (BG0, BG1_Ping) and (BG0, BG1_Pong)?
-        // Pass execute needs to switch BG1. BG0 is constant.
-        // RaytracePass had `bind_groups` as array of BGs where each invalidates everything? No.
-        // RaytracePass: `set_bind_group(0, &self.bind_groups[(frame % 2)], ...)` -> It swapped Reservoir buffers which were in BG0.
-        // Here I put Reservoirs in BG1.
-        // So I need to set BG0 once, and flip BG1.
-        // Let's reuse `bind_groups` to store BG1s.
-        // And add `bind_group0` field.
+        // Frame 1 logic: Write to Gbuffer 1.
+        // Restir needs Curr=1, Prev=0.
+        let bg0_1 = create_bg0(
+            "Restir BG0 (Curr=1)",
+            &gbuffer_pos[1],
+            &gbuffer_normal[1],
+            &gbuffer_pos[0],
+            &gbuffer_normal[0],
+        );
 
         Self {
             pipeline,
             reservoir_buffers,
-            bind_groups: [bg1_ping, bg1_pong],
-            bind_group0: bg0,
+            bind_groups0: [bg0_0, bg0_1],
+            bind_groups1: [bg1_1, bg1_0],
+
             scene_info_buffer,
         }
     }
 
-    // Need to execute
     pub fn execute(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -342,8 +382,13 @@ impl RestirPass {
             timestamp_writes: None,
         });
         cpass.set_pipeline(&self.pipeline);
-        cpass.set_bind_group(0, &self.bind_group0, &[]);
-        cpass.set_bind_group(1, &self.bind_groups[(frame_count % 2) as usize], &[]);
+
+        // idx = frame_count % 2
+        let idx = (frame_count % 2) as usize;
+
+        cpass.set_bind_group(0, &self.bind_groups0[idx], &[]);
+        cpass.set_bind_group(1, &self.bind_groups1[idx], &[]);
+
         cpass.dispatch_workgroups((width + 7) / 8, (height + 7) / 8, 1);
     }
 }

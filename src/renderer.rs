@@ -30,8 +30,8 @@ pub struct RenderTargets {
     pub accumulation_buffer: wgpu::Buffer,
 
     // --- G-Buffer Textures ---
-    pub gbuffer_pos: wgpu::Texture, // World Position (xyz) + Linear Depth (w)
-    pub gbuffer_normal: wgpu::Texture, // World Normal (xyz) + Roughness (w)
+    pub gbuffer_pos: [wgpu::Texture; 2],
+    pub gbuffer_normal: [wgpu::Texture; 2],
     pub gbuffer_albedo: wgpu::Texture, // Albedo (rgb) + Metallic/MatID (w)
     pub gbuffer_motion: wgpu::Texture, // Motion Vector (xy)
 
@@ -40,8 +40,8 @@ pub struct RenderTargets {
     pub pp_view: wgpu::TextureView,
 
     // Views (Binding用)
-    pub gbuffer_pos_view: wgpu::TextureView,
-    pub gbuffer_normal_view: wgpu::TextureView,
+    pub gbuffer_pos_view: [wgpu::TextureView; 2],
+    pub gbuffer_normal_view: [wgpu::TextureView; 2],
     pub gbuffer_albedo_view: wgpu::TextureView,
     pub gbuffer_motion_view: wgpu::TextureView,
 }
@@ -106,20 +106,33 @@ impl RenderTargets {
                 format,
                 usage: wgpu::TextureUsages::STORAGE_BINDING
                     | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC,
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::COPY_DST, // Added COPY_DST for consistency with provided snippet
                 view_formats: &[],
             })
         };
 
         // G-Buffer Textures
-        let gbuffer_pos = create_storage_tex("GBuffer Position", wgpu::TextureFormat::Rgba32Float);
-        let gbuffer_normal = create_storage_tex("GBuffer Normal", wgpu::TextureFormat::Rgba32Float);
+        let gbuffer_pos = [
+            create_storage_tex("GBuffer Position 0", wgpu::TextureFormat::Rgba32Float),
+            create_storage_tex("GBuffer Position 1", wgpu::TextureFormat::Rgba32Float),
+        ];
+        let gbuffer_normal = [
+            create_storage_tex("GBuffer Normal 0", wgpu::TextureFormat::Rgba32Float),
+            create_storage_tex("GBuffer Normal 1", wgpu::TextureFormat::Rgba32Float),
+        ];
         let gbuffer_albedo = create_storage_tex("GBuffer Albedo", wgpu::TextureFormat::Rgba8Unorm);
         let gbuffer_motion = create_storage_tex("GBuffer Motion", wgpu::TextureFormat::Rg32Float);
 
         // Views
-        let gbuffer_pos_view = gbuffer_pos.create_view(&Default::default());
-        let gbuffer_normal_view = gbuffer_normal.create_view(&Default::default());
+        let gbuffer_pos_view = [
+            gbuffer_pos[0].create_view(&Default::default()),
+            gbuffer_pos[1].create_view(&Default::default()),
+        ];
+        let gbuffer_normal_view = [
+            gbuffer_normal[0].create_view(&Default::default()),
+            gbuffer_normal[1].create_view(&Default::default()),
+        ];
         let gbuffer_albedo_view = gbuffer_albedo.create_view(&Default::default());
         let gbuffer_motion_view = gbuffer_motion.create_view(&Default::default());
 
@@ -404,8 +417,12 @@ impl Renderer {
         );
 
         // 0. G-Buffer Pass
-        self.gbuffer_pass
-            .execute(&mut encoder, self.render_width, self.render_height);
+        self.gbuffer_pass.execute(
+            &mut encoder,
+            self.render_width,
+            self.render_height,
+            self.frame_count,
+        );
 
         // ---------------------------------------------------------------------
         // DEBUG: G-Buffer Visualization
@@ -424,21 +441,13 @@ impl Renderer {
             );
 
             // Determine which reservoir buffer is the *output* of the current frame
-            // In restir.wgsl:
-            // @group(1) @binding(1) var<storage, read_write> curr_reservoirs: array<Reservoir>;
-            // In RestirPass::execute:
-            // cpass.set_bind_group(1, &self.bind_groups[(frame_count % 2)], ...);
-            // If frame % 2 == 0 (Ping BG): Binding 1 is Buf[1]. So Output is Buf[1].
-            // If frame % 2 == 1 (Pong BG): Binding 1 is Buf[0]. So Output is Buf[0].
-            // Wait, logic check:
-            // Ping (Frame 0): Prev=0, Curr=1. Output=1.
-            // Pong (Frame 1): Prev=1, Curr=0. Output=0.
-            // Correct.
-            let current_reservoir_buffer = if self.frame_count % 2 == 0 {
-                &self.restir_pass.reservoir_buffers[1]
-            } else {
-                &self.restir_pass.reservoir_buffers[0]
-            };
+            // Frame i: Write GBuffer[i%2].
+            // Restir: Read GBuffer[i%2] (Curr).
+            //         Read Res[(i+1)%2] (Old). Write Res[i%2] (New).
+
+            // So Output Reservoir is Res[frame % 2].
+            let current_reservoir_buffer =
+                &self.restir_pass.reservoir_buffers[(self.frame_count % 2) as usize];
 
             // 2. Shade Pass (Use GBuffer + Reservoirs)
             self.shade_pass.execute(
@@ -446,6 +455,7 @@ impl Renderer {
                 ctx,
                 self.render_width,
                 self.render_height,
+                self.frame_count,
                 &self.targets.gbuffer_pos_view,
                 &self.targets.gbuffer_normal_view,
                 &self.targets.gbuffer_albedo_view,
@@ -469,10 +479,11 @@ impl Renderer {
                 .execute(&mut encoder, self.render_width, self.render_height);
         } else if debug_mode == 1 || debug_mode == 2 || debug_mode == 4 {
             // Visualize Float Texture (Pos / Normal / Motion) -> PostPass (Tonemap)
+            let idx = (self.frame_count % 2) as usize;
             let src_tex = if debug_mode == 1 {
-                &self.targets.gbuffer_pos
+                &self.targets.gbuffer_pos[idx]
             } else if debug_mode == 2 {
-                &self.targets.gbuffer_normal
+                &self.targets.gbuffer_normal[idx]
             } else {
                 &self.targets.gbuffer_motion
             };

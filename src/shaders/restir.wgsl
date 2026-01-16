@@ -29,11 +29,13 @@ struct Light {
 }
 
 struct Camera {
-    view_proj: mat4x4f,
-    view_inv: mat4x4f,
-    proj_inv: mat4x4f,
+    view_proj: array<vec4f, 4>,
+    view_inverse: array<vec4f, 4>,
+    proj_inverse: array<vec4f, 4>,
     view_pos: vec4f,
-    prev_view_proj: mat4x4f,
+    prev_view_proj: array<vec4f, 4>,
+    frame_count: u32,
+    num_lights: u32,
 }
 
 // --- Bindings ---
@@ -47,6 +49,10 @@ struct Camera {
 @group(0) @binding(4) var<uniform> camera: Camera;
 @group(0) @binding(5) var<storage, read> lights: array<Light>;
 @group(0) @binding(6) var<uniform> scene_info: vec4u; // x=light_count, y=frame_count
+
+// Prev G-Buffer for validation
+@group(0) @binding(7) var prev_gbuffer_pos: texture_2d<f32>;
+@group(0) @binding(8) var prev_gbuffer_normal: texture_2d<f32>;
 
 // Group 1: Reservoirs
 @group(1) @binding(0) var<storage, read_write> prev_reservoirs: array<Reservoir>;
@@ -71,6 +77,23 @@ fn tea(v0: u32, v1: u32) -> u32 {
         v1_ += ((v0_ << 4u) + 0xad90777du) ^ (v0_ + s0) ^ ((v0_ >> 5u) + 0x7e95761eu);
     }
     return v0_;
+}
+
+fn is_valid_neighbor(
+    curr_pos: vec3f, curr_normal: vec3f, curr_mat: u32,
+    prev_pos: vec3f, prev_normal: vec3f, prev_mat: u32
+) -> bool {
+    // 1. マテリアルIDが違うなら別人
+    if curr_mat != prev_mat { return false; }
+
+    // 2. 位置が離れすぎていたらNG
+    let dist = dot(curr_pos - prev_pos, curr_pos - prev_pos);
+    if dist > 0.05 { return false; }
+
+    // 3. 法線の向きが違いすぎたらNG
+    if dot(curr_normal, prev_normal) < 0.9 { return false; }
+
+    return true;
 }
 
 // Reuse update_reservoir from raytrace.wgsl idea
@@ -121,6 +144,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
     let pos = pos_w.xyz;
     let normal = normal_w.xyz;
+    let mat_id = i32(pos_w.w + 0.5);
     let num_lights = scene_info.x;
 
     var r: Reservoir;
@@ -151,38 +175,46 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         r.W = 0.0;
     }
     
-    // --- Phase 2: Temporal Reuse ---
-    // Note: User asked for "without motion" first, but motion vector texture is bound.
-    // Let's implement basic logic. If no motion used, we just read same pixel index from prev?
-    // No, camera moves, so we MUST reuse based on reprojection or at least same screen coord if static.
-    // "temporal reuse without motion" might mean "assume motion is 0" or "don't use motion vectors yet".
-    // But since I implemented motion vectors, I should use them if I can.
-    // The user specifically said "time reuse without motion" (motionなしで).
-    // So I will just use current coord `id.xy` to read from prev_reservoirs for now.
-    // This assumes static camera/scene or ghosting will appear.
-    
     // Clamp history
     if r.M > MAX_RESERVOIR_M_TEMPORAL {
         r.M = MAX_RESERVOIR_M_TEMPORAL;
     }
+    // --- Phase 2: Temporal Reuse ---
+    let motion = textureLoad(gbuffer_motion, coord, 0);
+    let uv = (vec2f(id.xy) + 0.5) / vec2f(size);
+    let prev_uv = uv + motion.xy;
+    let prev_id_xy = vec2u(prev_uv * vec2f(size));
+    let prev_pixel_idx = prev_id_xy.y * size.x + prev_id_xy.x;
 
-    let prev_pixel_idx = pixel_idx; // No reproject
-    let prev_r = prev_reservoirs[prev_pixel_idx];
-    
-    // Combine
-    // Update reservoir takes weight = p_hat * W * M
-    // But here p_hat is relative to current shading point.
-    // We need to re-evaluate p_hat of the previous sample at current position (shift mapping? or just reuse p_hat if ignoring geometric changes).
-    // Proper way: p_hat = target_pdf(prev_r.light_index, pos, normal);
-    // weight = p_hat * prev_r.W * prev_r.M;
+    // 画面外チェック
+    if prev_uv.x >= 0.0 && prev_uv.x <= 1.0 && prev_uv.y >= 0.0 && prev_uv.y <= 1.0 {
 
-    let prev_p_hat = target_pdf(prev_r.y, pos, normal);
-    let prev_weight = prev_p_hat * prev_r.W * f32(prev_r.M);
+        // 過去のG-Bufferを読んでチェック
+        let prev_pos_data = textureLoad(prev_gbuffer_pos, prev_id_xy, 0);
+        let prev_normal_data = textureLoad(prev_gbuffer_normal, prev_id_xy, 0);
 
-    if update_reservoir(&r, prev_r.y, prev_weight, simple_rand(seed + 9999u)) {
-        r.M += prev_r.M;
-    } else {
-        r.M += prev_r.M;
+        let prev_mat_id = bitcast<u32>(prev_pos_data.w);
+
+        if is_valid_neighbor(pos, normal, bitcast<u32>(pos_w.w), prev_pos_data.xyz, prev_normal_data.xyz, prev_mat_id) {
+            // ★合格！過去のReservoirをマージ
+            var prev_r = prev_reservoirs[prev_pixel_idx];
+            
+            // 過去のReservoirが持つライトが、今の場所(pos)でどれくらい明るいか再評価
+            // (これをしないと、影に入ったのに明るいままになる)
+            let p_hat_prev = target_pdf(prev_r.y, pos, normal);
+            
+            // マージ処理 (Algorithm 3 in ReSTIR paper)
+            // 過去の重み補正: limit M to avoid history explosion (max 20)
+            prev_r.M = min(prev_r.M, 20u); 
+            
+            // update_reservoirに渡すweightは `p_hat * W * M`
+            let w_prev = p_hat_prev * prev_r.W * f32(prev_r.M);
+
+            update_reservoir(&r, prev_r.y, w_prev, simple_rand(seed + M_candidates * 7919u + 1u));
+            
+            // サンプル数(M)を加算
+            r.M += prev_r.M;
+        }
     }
     
     // Finalize W

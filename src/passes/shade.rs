@@ -208,8 +208,9 @@ impl ShadePass {
         ctx: &WgpuContext,
         width: u32,
         height: u32,
-        gbuffer_pos: &wgpu::TextureView,
-        gbuffer_normal: &wgpu::TextureView,
+        frame_count: u32,
+        gbuffer_pos: &[wgpu::TextureView; 2],
+        gbuffer_normal: &[wgpu::TextureView; 2],
         gbuffer_albedo: &wgpu::TextureView,
         out_view: &wgpu::TextureView,
         camera_buffer: &wgpu::Buffer,
@@ -223,17 +224,18 @@ impl ShadePass {
         texture_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
     ) {
+        let idx = (frame_count % 2) as usize;
         let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Shade Bind Group"),
             layout: &self.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(gbuffer_pos),
+                    resource: wgpu::BindingResource::TextureView(&gbuffer_pos[idx]),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(gbuffer_normal),
+                    resource: wgpu::BindingResource::TextureView(&gbuffer_normal[idx]),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,

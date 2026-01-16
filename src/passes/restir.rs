@@ -5,26 +5,10 @@ use bytemuck::{Pod, Zeroable};
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct Reservoir {
-    pub y: u32, // Light Index (pad to vec4f in shader, but here u32?)
-    // Shader: vec4f for y.
-    // Wait, shader uses vec4f, so 16 bytes.
-    // But in my restir.wgsl I defined it as struct with y: vec4f for some reason?
-    // Let's check my write to restir.wgsl.
-    // "y: vec4f" -> this was a mistake if I want to store just index.
-    // But raytrace.rs has struct Reservoir { y: u32, ... }
-    // Let's stick to matching raytrace.rs struct first, adjusting shader to match Rust is easier than adjusting Rust to match weird Shader.
-    // raytrace.rs: y: u32, w_sum: f32, m: u32, w: f32
-    // Total 16 bytes.
-    // Shader Reservoir struct needs to match 16 bytes.
-    // In restir.wgsl I wrote:
-    // struct Reservoir {
-    //    y: vec4f, ...
-    // }
-    // This is mismatch. I need to fix restir.wgsl as well.
-    // For now, let's define Rust struct as 16 bytes.
-    pub w_sum: f32,
-    pub m: u32,
-    pub w: f32,
+    pub y: u32,     // Light Index
+    pub w_sum: f32, // Sum of weights
+    pub m: u32,     // Number of samples seen
+    pub w: f32,     // Generalized weight
 }
 
 impl Reservoir {

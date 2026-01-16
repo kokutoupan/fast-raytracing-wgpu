@@ -3,7 +3,7 @@ use crate::wgpu_ctx::WgpuContext;
 
 pub struct GBufferPass {
     pub pipeline: wgpu::ComputePipeline,
-    pub bind_groups: [wgpu::BindGroup; 2], // Ping-Pongが必要ないなら1つでも可
+    pub bind_group: wgpu::BindGroup,
     pub bind_group_layout: wgpu::BindGroupLayout,
     pub texture_bind_group: wgpu::BindGroup,
 }
@@ -252,7 +252,7 @@ impl GBufferPass {
 
         Self {
             pipeline,
-            bind_groups: [bind_group.clone(), bind_group],
+            bind_group,
             bind_group_layout,
             texture_bind_group: bind_group1,
         }
@@ -264,7 +264,7 @@ impl GBufferPass {
             timestamp_writes: None,
         });
         cpass.set_pipeline(&self.pipeline);
-        cpass.set_bind_group(0, &self.bind_groups[0], &[]);
+        cpass.set_bind_group(0, &self.bind_group, &[]);
         cpass.set_bind_group(1, &self.texture_bind_group, &[]);
         cpass.dispatch_workgroups((width + 7) / 8, (height + 7) / 8, 1);
     }

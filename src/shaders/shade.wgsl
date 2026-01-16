@@ -364,23 +364,17 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     for (var depth = 0u; depth < MAX_DEPTH; depth++) {
         // Resolve Material
         var mat = mat_primary;
-        /*
-        if depth > 0u {
-            mat = materials[hit.mat_id];
-        }
-        */
-        // Use the hit info's mat_id always (For primary, hit.mat_id was set from GBuffer)
-        // Actually, for primary, `hit` is initialized from GBuffer textures. `mat_primary` was decoded.
+        
+        // Use the hit info's mat_id for secondary bounces
         if depth > 0u {
             mat = materials[hit.mat_id];
         }
 
         var base_color = mat.base_color.rgb;
 
-        // Texture Sampling (Applied to both Primary and Secondary if valid UVs exist)
-        // Primary: UVs are 0 because GBuffer doesn't store them. 
-        //   BUT we are using `gbuffer_albedo` override for Primary! So `base_color` is already textured.
-        // Secondary: We have UVs from interpolation below.
+        // Texture Sampling
+        // Primary (depth=0): Already handled via GBuffer override.
+        // Secondary (depth>0): Manual sampling using interpolated UVs.
         if depth > 0u {
             let tex_color = textureSampleLevel(textures, tex_sampler, hit.uv, i32(mat.tex_id), 0.0);
             base_color *= tex_color.rgb;

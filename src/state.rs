@@ -143,6 +143,12 @@ impl State {
             self.renderer.frame_count,
             self.scene_resources.num_lights,
         );
+
+        // Start Step 182 changes: Update prev_view_proj for the next frame
+        use glam::Mat4;
+        self.camera_controller.prev_view_proj = Mat4::from_cols_array_2d(&camera_uniform.view_proj);
+        // End Step 182 changes
+
         self.ctx.queue.write_buffer(
             &self.camera_buffer,
             0,

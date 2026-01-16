@@ -195,7 +195,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
         let prev_mat_id = bitcast<u32>(prev_pos_data.w);
 
-        if is_valid_neighbor(pos, normal, bitcast<u32>(pos_w.w), prev_pos_data.xyz, prev_normal_data.xyz, prev_mat_id) {
+        if is_valid_neighbor(pos, normal, u32(pos_w.w + 0.5), prev_pos_data.xyz, prev_normal_data.xyz, prev_mat_id) {
             // ★合格！過去のReservoirをマージ
             var prev_r = prev_reservoirs[prev_pixel_idx];
             

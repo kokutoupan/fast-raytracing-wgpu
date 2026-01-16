@@ -190,8 +190,8 @@ impl CameraController {
         // 現在のViewProjection行列
         let view_proj = proj * view;
 
-        // 初回フレーム(0)の場合は、モーションベクトルが暴れないように prev = current にする
-        let prev_view_proj = if frame_count == 0 {
+        // 初回のみ Identity なので防ぐ
+        let prev_view_proj = if self.prev_view_proj == Mat4::IDENTITY {
             view_proj
         } else {
             self.prev_view_proj

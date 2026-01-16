@@ -369,7 +369,10 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         }
 
         // 1. Emission (MIS)
-        if mat.light_index >= 0 && hit.front_face {
+        if mat.light_index >= 0 {
+            if !hit.front_face {
+               break;
+            }
             let light = lights[mat.light_index];
             let Le = light.emission.rgb * light.emission.a;
             var mis_weight = 1.0;
@@ -386,7 +389,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
                 } else { mis_weight = 0.0; }
             }
             accumulated_color += Le * throughput * mis_weight;
-             break; // Stop at light
+            break; // Stop at light
         }
         
         // 2. NEE
@@ -519,7 +522,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
             hit.front_face = committed.front_face;
             hit.ffnormal = select(-hit.normal, hit.normal, hit.front_face);
             hit.t = committed.t;
-            hit.pos = (hit.pos + hit.ffnormal * 0.001) + next_dir * hit.t; // Ray origin was offset
+            hit.pos = origin + next_dir * hit.t; // Use the actual ray origin!
 
             wo = -next_dir;
         }

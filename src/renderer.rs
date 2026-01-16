@@ -1,4 +1,4 @@
-use crate::passes::{BlitPass, GBufferPass, PostPass, RaytracePass};
+use crate::passes::{BlitPass, GBufferPass, PostPass, RaytracePass, ShadePass};
 use crate::scene;
 use crate::wgpu_ctx::WgpuContext;
 use crate::wgpu_utils::*;
@@ -33,6 +33,7 @@ pub struct RenderTargets {
     pub gbuffer_pos: wgpu::Texture, // World Position (xyz) + Linear Depth (w)
     pub gbuffer_normal: wgpu::Texture, // World Normal (xyz) + Roughness (w)
     pub gbuffer_albedo: wgpu::Texture, // Albedo (rgb) + Metallic/MatID (w)
+    pub gbuffer_motion: wgpu::Texture, // Motion Vector (xy)
 
     // Views (convenience)
     pub raw_view: wgpu::TextureView,
@@ -42,6 +43,7 @@ pub struct RenderTargets {
     pub gbuffer_pos_view: wgpu::TextureView,
     pub gbuffer_normal_view: wgpu::TextureView,
     pub gbuffer_albedo_view: wgpu::TextureView,
+    pub gbuffer_motion_view: wgpu::TextureView,
 }
 
 impl RenderTargets {
@@ -113,11 +115,13 @@ impl RenderTargets {
         let gbuffer_pos = create_storage_tex("GBuffer Position", wgpu::TextureFormat::Rgba32Float);
         let gbuffer_normal = create_storage_tex("GBuffer Normal", wgpu::TextureFormat::Rgba32Float);
         let gbuffer_albedo = create_storage_tex("GBuffer Albedo", wgpu::TextureFormat::Rgba8Unorm);
+        let gbuffer_motion = create_storage_tex("GBuffer Motion", wgpu::TextureFormat::Rg32Float);
 
         // Views
         let gbuffer_pos_view = gbuffer_pos.create_view(&Default::default());
         let gbuffer_normal_view = gbuffer_normal.create_view(&Default::default());
         let gbuffer_albedo_view = gbuffer_albedo.create_view(&Default::default());
+        let gbuffer_motion_view = gbuffer_motion.create_view(&Default::default());
 
         let pp_view = post_processed_texture.create_view(&Default::default());
 
@@ -130,11 +134,13 @@ impl RenderTargets {
             gbuffer_pos,
             gbuffer_normal,
             gbuffer_albedo,
+            gbuffer_motion,
             raw_view,
             pp_view,
             gbuffer_pos_view,
             gbuffer_normal_view,
             gbuffer_albedo_view,
+            gbuffer_motion_view,
         }
     }
 }
@@ -148,7 +154,7 @@ pub struct Renderer {
 
     // Passes
     gbuffer_pass: GBufferPass,
-    raytrace_pass: RaytracePass,
+    shade_pass: ShadePass,
     post_pass: PostPass,
     blit_pass: BlitPass,
 
@@ -288,18 +294,19 @@ impl Renderer {
             &targets.gbuffer_pos_view,
             &targets.gbuffer_normal_view,
             &targets.gbuffer_albedo_view,
+            &targets.gbuffer_motion_view,
         );
 
-        let raytrace_pass = RaytracePass::new(
-            ctx,
-            scene_resources,
-            camera_buffer,
-            &targets.raw_view,
-            &texture_view,
-            &sampler,
-            render_width,
-            render_height,
-        );
+        // let raytrace_pass = RaytracePass::new(
+        //     ctx,
+        //     scene_resources,
+        //     camera_buffer,
+        //     &targets.raw_view,
+        //     &texture_view,
+        //     &sampler,
+        //     render_width,
+        //     render_height,
+        // );
 
         let post_pass = PostPass::new(
             ctx,
@@ -309,6 +316,8 @@ impl Renderer {
             &post_params_buffer,
         );
 
+        let shade_pass = ShadePass::new(ctx);
+
         let blit_pass = BlitPass::new(ctx, &targets.pp_view, &sampler, &blit_params_buffer);
 
         Self {
@@ -317,7 +326,7 @@ impl Renderer {
             window_width: ctx.config.width,
             window_height: ctx.config.height,
             gbuffer_pass,
-            raytrace_pass,
+            shade_pass,
             post_pass,
             blit_pass,
             targets,
@@ -386,22 +395,29 @@ impl Renderer {
         // ---------------------------------------------------------------------
         // DEBUG: G-Buffer Visualization
         // 0: Raytrace (Default), 1: Pos (Float), 2: Normal (Float), 3: Albedo (Unorm)
+        // Motion is not visualized
         let debug_mode = 0;
 
         if debug_mode == 0 {
-            // 1. Ray Tracing Pass
-            self.raytrace_pass.execute(
+            // 1. G-Buffer Pass (Already executed)
+
+            // 2. Shade Pass
+            self.shade_pass.execute(
                 &mut encoder,
+                ctx,
                 self.render_width,
                 self.render_height,
-                self.frame_count,
+                &self.targets.gbuffer_pos_view,
+                &self.targets.gbuffer_normal_view,
+                &self.targets.gbuffer_albedo_view,
+                &self.targets.raw_view,
             );
 
             // 2. Post Pass
             self.post_pass
                 .execute(&mut encoder, self.render_width, self.render_height);
         } else if debug_mode == 1 || debug_mode == 2 {
-            // Visualize Float Texture (Pos / Normal) -> PostPass (Tonemap)
+            // Visualize Float Texture (Pos / Normal / Motion) -> PostPass (Tonemap)
             let src_tex = if debug_mode == 1 {
                 &self.targets.gbuffer_pos
             } else {

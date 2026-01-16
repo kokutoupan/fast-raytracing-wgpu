@@ -12,6 +12,8 @@ const PI = 3.14159265359;
 struct Camera {
     view_inverse: array<vec4f, 4>,
     proj_inverse: array<vec4f, 4>,
+    view_proj: array<vec4f, 4>,
+    prev_view_proj: array<vec4f, 4>,
     frame_count: u32,
     num_lights: u32,
 }

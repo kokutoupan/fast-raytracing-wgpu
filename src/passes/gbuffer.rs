@@ -16,6 +16,7 @@ impl GBufferPass {
         pos_view: &wgpu::TextureView,
         normal_view: &wgpu::TextureView,
         albedo_view: &wgpu::TextureView,
+        motion_view: &wgpu::TextureView,
     ) -> Self {
         // シェーダー読み込み
         let shader = ctx
@@ -123,6 +124,17 @@ impl GBufferPass {
                             },
                             count: None,
                         },
+                        // 9: Motion Output
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 9,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::StorageTexture {
+                                access: wgpu::StorageTextureAccess::WriteOnly,
+                                format: wgpu::TextureFormat::Rg32Float,
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                            },
+                            count: None,
+                        },
                     ],
                 });
 
@@ -186,6 +198,10 @@ impl GBufferPass {
                 wgpu::BindGroupEntry {
                     binding: 8,
                     resource: wgpu::BindingResource::TextureView(albedo_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: wgpu::BindingResource::TextureView(motion_view),
                 },
             ],
         });

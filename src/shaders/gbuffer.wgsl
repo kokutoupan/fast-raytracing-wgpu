@@ -4,6 +4,8 @@ enable wgpu_ray_query;
 struct Camera {
     view_inverse: array<vec4f, 4>,
     proj_inverse: array<vec4f, 4>,
+    view_proj: array<vec4f, 4>,
+    prev_view_proj: array<vec4f, 4>,
     frame_count: u32,
     num_lights: u32,
 }
@@ -44,6 +46,8 @@ struct MeshInfo {
 @group(0) @binding(7) var out_normal: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(8) var out_albedo: texture_storage_2d<rgba8unorm, write>;
 
+@group(0) @binding(9) var out_motion: texture_storage_2d<rg32float, write>;
+
 // --- Helpers ---
 struct Ray {
     origin: vec3f,
@@ -59,11 +63,11 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let uv = (vec2f(id.xy) + 0.5) / vec2f(size);
     let ndc = vec2f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
 
-    let view_inv = mat4x4f(camera.view_inverse[0], camera.view_inverse[1], camera.view_inverse[2], camera.view_inverse[3]);
-    let proj_inv = mat4x4f(camera.proj_inverse[0], camera.proj_inverse[1], camera.proj_inverse[2], camera.proj_inverse[3]);
+    let view_inv = mat4x4<f32>(camera.view_inverse[0], camera.view_inverse[1], camera.view_inverse[2], camera.view_inverse[3]);
+    let proj_inv = mat4x4<f32>(camera.proj_inverse[0], camera.proj_inverse[1], camera.proj_inverse[2], camera.proj_inverse[3]);
 
     let origin = view_inv[3].xyz;
-    let target_pos = view_inv * proj_inv * vec4f(ndc, 1.0, 1.0);
+    let target_pos = view_inv * proj_inv * vec4<f32>(ndc, 1.0, 1.0);
     let direction = normalize(target_pos.xyz / target_pos.w - origin);
 
     // 2. Intersection (Ray Query)
@@ -75,9 +79,11 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
     if committed.kind == 0u {
         // Miss (Background)
-        textureStore(out_pos, id.xy, vec4f(0.0, 0.0, 0.0, -1.0)); // w=-1 for miss
-        textureStore(out_normal, id.xy, vec4f(0.0));
-        textureStore(out_albedo, id.xy, vec4f(0.0, 0.0, 0.0, 1.0));
+        let coord = vec2<i32>(id.xy);
+        textureStore(out_pos, coord, vec4<f32>(0.0, 0.0, 0.0, -1.0)); // w=-1 for miss
+        textureStore(out_normal, coord, vec4<f32>(0.0));
+        textureStore(out_albedo, coord, vec4<f32>(0.0, 0.0, 0.0, 1.0));
+        textureStore(out_motion, coord, vec4<f32>(0.0, 0.0, 0.0, 0.0));
         return;
     }
 
@@ -109,14 +115,33 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let ffnormal = select(-normal, normal, committed.front_face);
 
     let pos = origin + direction * committed.t;
-
     let mat = materials[mat_id];
+
+    // --- Motion Vector Calculation ---
+    // Clip Space: -1..1
+    // UV Space: 0..1
+    let view_proj = mat4x4<f32>(camera.view_proj[0], camera.view_proj[1], camera.view_proj[2], camera.view_proj[3]);
+    let prev_view_proj = mat4x4<f32>(camera.prev_view_proj[0], camera.prev_view_proj[1], camera.prev_view_proj[2], camera.prev_view_proj[3]);
+
+    let curr_clip = view_proj * vec4<f32>(pos, 1.0);
+    let prev_clip = prev_view_proj * vec4<f32>(pos, 1.0);
+
+    let curr_ndc = curr_clip.xy / curr_clip.w;
+    let prev_ndc = prev_clip.xy / prev_clip.w;
+
+    let curr_uv = curr_ndc * vec2f(0.5, -0.5) + 0.5; // Y flip for UV
+    let prev_uv = prev_ndc * vec2f(0.5, -0.5) + 0.5;
+
+    let motion = prev_uv - curr_uv;
 
     // 4. Store G-Buffer
     // Pos.w に Linear Depth または Material ID を入れると便利
-    textureStore(out_pos, id.xy, vec4f(pos, committed.t)); 
+    let coord = vec2<i32>(id.xy);
+    textureStore(out_pos, coord, vec4f(pos, committed.t)); 
     // Normal.w に Roughness
-    textureStore(out_normal, id.xy, vec4f(ffnormal, mat.roughness));
+    textureStore(out_normal, coord, vec4f(ffnormal, mat.roughness));
     // Albedo.w に Metallic
-    textureStore(out_albedo, id.xy, vec4f(mat.base_color.rgb, mat.metallic));
+    textureStore(out_albedo, coord, vec4f(mat.base_color.rgb, mat.metallic));
+    // Motion
+    textureStore(out_motion, coord, vec4f(motion, 0.0, 0.0));
 }

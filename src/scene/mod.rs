@@ -65,6 +65,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
         plane_id,
         mat_checker,
         Mat4::from_translation(Vec3::new(0.0, -1.0, 0.0)) * Mat4::from_scale(Vec3::splat(2.0)),
+        0x1,
     );
     // Ceiling (White)
     builder.add_instance(
@@ -73,6 +74,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
         Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0))
             * Mat4::from_rotation_x(std::f32::consts::PI)
             * Mat4::from_scale(Vec3::splat(2.0)),
+        0x1,
     );
     // Back (White)
     builder.add_instance(
@@ -81,6 +83,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
         Mat4::from_translation(Vec3::new(0.0, 0.0, -1.0))
             * Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2)
             * Mat4::from_scale(Vec3::splat(2.0)),
+        0x1,
     );
     // Left (Red)
     builder.add_instance(
@@ -89,6 +92,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
         Mat4::from_translation(Vec3::new(-1.0, 0.0, 0.0))
             * Mat4::from_rotation_z(-std::f32::consts::FRAC_PI_2)
             * Mat4::from_scale(Vec3::splat(2.0)),
+        0x1,
     );
     // Right (Green)
     builder.add_instance(
@@ -97,6 +101,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
         Mat4::from_translation(Vec3::new(1.0, 0.0, 0.0))
             * Mat4::from_rotation_z(std::f32::consts::FRAC_PI_2)
             * Mat4::from_scale(Vec3::splat(2.0)),
+        0x1,
     );
     // Main Light (Ceiling)
     builder.add_instance(
@@ -105,6 +110,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
         Mat4::from_translation(Vec3::new(0.0, 0.99, 0.0))
             * Mat4::from_rotation_x(std::f32::consts::PI)
             * Mat4::from_scale(Vec3::splat(0.5)),
+        0x2,
     );
     // Main Light:Light info
     builder.add_quad_light(
@@ -120,6 +126,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
         crystal_id,
         mat_crystal,
         Mat4::from_translation(crystal_pos) * Mat4::from_scale(Vec3::splat(0.5)),
+        0x1,
     );
 
     // クリスタル内部の光
@@ -127,6 +134,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
         sphere_id,
         mat_sphere_light,
         Mat4::from_translation(crystal_pos) * Mat4::from_scale(Vec3::splat(0.1)),
+        0x2,
     );
     // 球体光源の情報
     builder.add_sphere_light(
@@ -142,6 +150,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
         Mat4::from_translation(Vec3::new(-0.35, -0.4 + 0.002, -0.3))
             * Mat4::from_rotation_y(0.4)
             * Mat4::from_scale(Vec3::new(0.6, 1.2, 0.6)),
+        0x1,
     );
 
     builder.build(device, queue)
@@ -167,7 +176,7 @@ pub fn create_restir_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneR
     let mat_floor = builder.add_material(Material::new([0.73, 0.73, 0.73, 1.0]).texture(0));
     let mat_wall = builder.add_material(Material::new([0.73, 0.73, 0.73, 1.0]).texture(0));
     let mat_metal =
-        builder.add_material(Material::new([1.0, 1.0, 1.0, 1.0]).metallic(0.0).texture(0));
+        builder.add_material(Material::new([1.0, 1.0, 1.0, 1.0]).metallic(0.2).texture(0));
 
     // 4. 床と壁
     // Floor
@@ -175,6 +184,7 @@ pub fn create_restir_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneR
         plane_id,
         mat_floor,
         Mat4::from_translation(Vec3::new(0.0, -1.0, 0.0)) * Mat4::from_scale(Vec3::splat(10.0)),
+        0x1,
     );
     // Back wall
     builder.add_instance(
@@ -183,6 +193,7 @@ pub fn create_restir_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneR
         Mat4::from_translation(Vec3::new(0.0, 5.0, -5.0))
             * Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2)
             * Mat4::from_scale(Vec3::splat(10.0)),
+        0x1,
     );
 
     // 5. 多数の光源 (Grid状に配置)
@@ -215,6 +226,7 @@ pub fn create_restir_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneR
                 mat_id,
                 Mat4::from_translation(Vec3::new(x, y, z))
                     * Mat4::from_scale(Vec3::splat(light_radius)),
+                0x2,
             );
 
             // 光源データ
@@ -227,6 +239,7 @@ pub fn create_restir_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneR
         cube_id,
         mat_metal,
         Mat4::from_translation(Vec3::new(0.0, -0.5, 0.0)) * Mat4::from_scale(Vec3::splat(0.5)),
+        0x1,
     );
 
     builder.build(device, queue)

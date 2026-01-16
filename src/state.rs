@@ -160,7 +160,14 @@ impl State {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        self.renderer.render(&self.ctx, &view)?;
+        self.renderer.render(
+            &self.ctx,
+            &view,
+            &self.camera_buffer,
+            &self.scene_resources.light_buffer,
+            &self.scene_resources.tlas,
+            self.scene_resources.num_lights,
+        )?;
 
         // 自動スクリーンショット (検証用: 最初の1回だけ)
         const TARGET_SPP: u32 = 64;

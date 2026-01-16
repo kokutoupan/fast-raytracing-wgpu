@@ -16,7 +16,7 @@ impl ShadePass {
                 .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                     label: Some("Shade Bind Group Layout"),
                     entries: &[
-                        // 0: GBuffer Pos (Texture)
+                        // 0: GBuffer Pos
                         wgpu::BindGroupLayoutEntry {
                             binding: 0,
                             visibility: wgpu::ShaderStages::COMPUTE,
@@ -27,7 +27,7 @@ impl ShadePass {
                             },
                             count: None,
                         },
-                        // 1: GBuffer Normal (Texture)
+                        // 1: GBuffer Normal
                         wgpu::BindGroupLayoutEntry {
                             binding: 1,
                             visibility: wgpu::ShaderStages::COMPUTE,
@@ -38,7 +38,7 @@ impl ShadePass {
                             },
                             count: None,
                         },
-                        // 2: GBuffer Albedo (Texture)
+                        // 2: GBuffer Albedo
                         wgpu::BindGroupLayoutEntry {
                             binding: 2,
                             visibility: wgpu::ShaderStages::COMPUTE,
@@ -49,7 +49,7 @@ impl ShadePass {
                             },
                             count: None,
                         },
-                        // 3: Output Color (Storage)
+                        // 3: Output
                         wgpu::BindGroupLayoutEntry {
                             binding: 3,
                             visibility: wgpu::ShaderStages::COMPUTE,
@@ -57,6 +57,48 @@ impl ShadePass {
                                 access: wgpu::StorageTextureAccess::WriteOnly,
                                 format: wgpu::TextureFormat::Rgba32Float,
                                 view_dimension: wgpu::TextureViewDimension::D2,
+                            },
+                            count: None,
+                        },
+                        // 4: Camera
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 4,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        // 5: Lights
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 5,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        // 6: Reservoirs
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 6,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        // 7: TLAS
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 7,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::AccelerationStructure {
+                                vertex_return: false,
                             },
                             count: None,
                         },
@@ -94,11 +136,14 @@ impl ShadePass {
         ctx: &WgpuContext,
         width: u32,
         height: u32,
-        // Resources
         gbuffer_pos: &wgpu::TextureView,
         gbuffer_normal: &wgpu::TextureView,
         gbuffer_albedo: &wgpu::TextureView,
-        output_view: &wgpu::TextureView,
+        out_view: &wgpu::TextureView,
+        camera_buffer: &wgpu::Buffer,
+        light_buffer: &wgpu::Buffer,
+        reservoir_buffer: &wgpu::Buffer,
+        tlas: &wgpu::Tlas,
     ) {
         let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Shade Bind Group"),
@@ -118,7 +163,23 @@ impl ShadePass {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(output_view),
+                    resource: wgpu::BindingResource::TextureView(out_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: light_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: reservoir_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::AccelerationStructure(tlas),
                 },
             ],
         });
@@ -127,14 +188,8 @@ impl ShadePass {
             label: Some("Shade Pass"),
             timestamp_writes: None,
         });
-
         cpass.set_pipeline(&self.pipeline);
         cpass.set_bind_group(0, &bind_group, &[]);
-
-        // Dispatch
-        let workgroup_size = 8;
-        let x_groups = (width + workgroup_size - 1) / workgroup_size;
-        let y_groups = (height + workgroup_size - 1) / workgroup_size;
-        cpass.dispatch_workgroups(x_groups, y_groups, 1);
+        cpass.dispatch_workgroups((width + 7) / 8, (height + 7) / 8, 1);
     }
 }

@@ -1,4 +1,4 @@
-use crate::passes::{BlitPass, GBufferPass, PostPass, RaytracePass, ShadePass};
+use crate::passes::{BlitPass, GBufferPass, PostPass, RestirPass, ShadePass};
 use crate::scene;
 use crate::wgpu_ctx::WgpuContext;
 use crate::wgpu_utils::*;
@@ -154,6 +154,7 @@ pub struct Renderer {
 
     // Passes
     gbuffer_pass: GBufferPass,
+    restir_pass: RestirPass,
     shade_pass: ShadePass,
     post_pass: PostPass,
     blit_pass: BlitPass,
@@ -279,7 +280,7 @@ impl Renderer {
             },
         );
 
-        let texture_view = texture_array.create_view(&wgpu::TextureViewDescriptor {
+        let _texture_view = texture_array.create_view(&wgpu::TextureViewDescriptor {
             label: Some("Texture Array View"),
             dimension: Some(wgpu::TextureViewDimension::D2Array),
             array_layer_count: Some(2),
@@ -297,16 +298,17 @@ impl Renderer {
             &targets.gbuffer_motion_view,
         );
 
-        // let raytrace_pass = RaytracePass::new(
-        //     ctx,
-        //     scene_resources,
-        //     camera_buffer,
-        //     &targets.raw_view,
-        //     &texture_view,
-        //     &sampler,
-        //     render_width,
-        //     render_height,
-        // );
+        let restir_pass = RestirPass::new(
+            ctx,
+            scene_resources,
+            camera_buffer,
+            &targets.gbuffer_pos_view,
+            &targets.gbuffer_normal_view,
+            &targets.gbuffer_albedo_view,
+            &targets.gbuffer_motion_view,
+            render_width,
+            render_height,
+        );
 
         let post_pass = PostPass::new(
             ctx,
@@ -326,6 +328,7 @@ impl Renderer {
             window_width: ctx.config.width,
             window_height: ctx.config.height,
             gbuffer_pass,
+            restir_pass,
             shade_pass,
             post_pass,
             blit_pass,
@@ -353,6 +356,10 @@ impl Renderer {
         &mut self,
         ctx: &WgpuContext,
         view: &wgpu::TextureView,
+        camera_buffer: &wgpu::Buffer,
+        light_buffer: &wgpu::Buffer,
+        tlas: &wgpu::Tlas,
+        light_count: u32,
     ) -> Result<(), wgpu::SurfaceError> {
         let mut encoder = ctx
             .device
@@ -394,14 +401,34 @@ impl Renderer {
 
         // ---------------------------------------------------------------------
         // DEBUG: G-Buffer Visualization
-        // 0: Raytrace (Default), 1: Pos (Float), 2: Normal (Float), 3: Albedo (Unorm)
-        // Motion is not visualized
+        // 0: Shaded, 1: Pos (Float), 2: Normal (Float), 3: Albedo (Unorm), 4: Motion
         let debug_mode = 0;
 
         if debug_mode == 0 {
-            // 1. G-Buffer Pass (Already executed)
+            // 1. ReSTIR Pass (Compute reservoirs)
+            self.restir_pass.execute(
+                &mut encoder,
+                ctx,
+                self.render_width,
+                self.render_height,
+                self.frame_count,
+                light_count,
+            );
 
-            // 2. Shade Pass
+            // Determine which reservoir buffer is the *output* of the current frame
+            // In restir.wgsl:
+            // @group(1) @binding(1) var<storage, read_write> curr_reservoirs: array<Reservoir>;
+            // In RestirPass::execute:
+            // cpass.set_bind_group(1, &self.bind_groups[(frame_count % 2)], ...);
+            // If frame % 2 == 0 (Ping BG): Binding 1 is Buf[1]. So Output is Buf[1].
+            // If frame % 2 == 1 (Pong BG): Binding 1 is Buf[0]. So Output is Buf[0].
+            let current_reservoir_buffer = if self.frame_count % 2 == 0 {
+                &self.restir_pass.reservoir_buffers[1]
+            } else {
+                &self.restir_pass.reservoir_buffers[0]
+            };
+
+            // 2. Shade Pass (Use GBuffer + Reservoirs)
             self.shade_pass.execute(
                 &mut encoder,
                 ctx,
@@ -410,19 +437,28 @@ impl Renderer {
                 &self.targets.gbuffer_pos_view,
                 &self.targets.gbuffer_normal_view,
                 &self.targets.gbuffer_albedo_view,
-                &self.targets.raw_view,
+                &self.targets.raw_view, // Using raw_view as output for now (Shade pass writes here)
+                camera_buffer,
+                light_buffer,
+                current_reservoir_buffer,
+                tlas,
             );
 
-            // 2. Post Pass
+            // 3. Post Pass (Tonemap + Accumulate?)
+            // ShadePass writes to raw_view.
+            // PostPass reads raw_view, writes to pp_view.
             self.post_pass
                 .execute(&mut encoder, self.render_width, self.render_height);
-        } else if debug_mode == 1 || debug_mode == 2 {
+        } else if debug_mode == 1 || debug_mode == 2 || debug_mode == 4 {
             // Visualize Float Texture (Pos / Normal / Motion) -> PostPass (Tonemap)
             let src_tex = if debug_mode == 1 {
                 &self.targets.gbuffer_pos
-            } else {
+            } else if debug_mode == 2 {
                 &self.targets.gbuffer_normal
+            } else {
+                &self.targets.gbuffer_motion
             };
+
             encoder.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: src_tex,
@@ -468,7 +504,7 @@ impl Renderer {
         }
         // ---------------------------------------------------------------------
 
-        // 3. Blit Pass
+        // 4. Blit Pass
         self.blit_pass.execute(&mut encoder, view);
 
         ctx.queue.submit(std::iter::once(encoder.finish()));

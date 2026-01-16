@@ -49,6 +49,10 @@ struct MeshInfo {
 
 @group(0) @binding(9) var out_motion: texture_storage_2d<rg32float, write>;
 
+// Group 1: Textures
+@group(1) @binding(0) var tex_sampler: sampler;
+@group(1) @binding(1) var textures: texture_2d_array<f32>;
+
 // --- Helpers ---
 struct Ray {
     origin: vec3f,
@@ -117,6 +121,12 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
     let pos = origin + direction * committed.t;
     let mat = materials[mat_id];
+    var base_color = mat.base_color.rgb;
+
+    let tex_uv = v0.uv.xy * w_bary + v1.uv.xy * u_bary + v2.uv.xy * v_bary;
+
+    let tex_color = textureSampleLevel(textures, tex_sampler, tex_uv, i32(mat.tex_id), 0.0);
+    base_color *= tex_color.rgb;
 
     // --- Motion Vector Calculation ---
     // Clip Space: -1..1
@@ -141,8 +151,8 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     textureStore(out_pos, coord, vec4f(pos, f32(mat_id))); 
     // Normal.w に Roughness
     textureStore(out_normal, coord, vec4f(ffnormal, mat.roughness));
-    // Albedo.w に Metallic
-    textureStore(out_albedo, coord, vec4f(mat.base_color.rgb, mat.metallic));
+     // Albedo.w に Metallic
+    textureStore(out_albedo, coord, vec4f(base_color, mat.metallic));
     // Motion
     textureStore(out_motion, coord, vec4f(motion, 0.0, 0.0));
 }

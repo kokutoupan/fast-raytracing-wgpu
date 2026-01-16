@@ -137,6 +137,10 @@ fn fresnel_schlick(f0: vec3f, v_dot_h: f32) -> vec3f {
     return f0 + (1.0 - f0) * pow(clamp(1.0 - v_dot_h, 0.0, 1.0), 5.0);
 }
 
+// Group 1: Textures
+@group(1) @binding(0) var tex_sampler: sampler;
+@group(1) @binding(1) var textures: texture_2d_array<f32>;
+
 // --- Helper Functions ---
 fn reflectance(cosine: f32, ref_idx: f32) -> f32 {
     // Schlick's approximation
@@ -343,10 +347,10 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     if mat_id < arrayLength(&materials) {
         let mat_static = materials[mat_id];
         mat_primary = mat_static;
-        // Override with G-Buffer sampled values
-        // mat_primary.base_color = vec4f(albedo_raw.rgb, 1.0);
-        // mat_primary.roughness = normal_w.w;
-        // mat_primary.metallic = albedo_raw.a;
+        // Override with G-Buffer sampled values (which include texture modulation)
+        mat_primary.base_color = vec4f(albedo_raw.rgb, 1.0);
+        mat_primary.roughness = normal_w.w;
+        mat_primary.metallic = albedo_raw.a;
     } else {
         // Fallback
         mat_primary.base_color = vec4f(albedo_raw.rgb, 1.0);
@@ -360,12 +364,26 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     for (var depth = 0u; depth < MAX_DEPTH; depth++) {
         // Resolve Material
         var mat = mat_primary;
-        var base_color = mat.base_color.rgb;
-
+        /*
         if depth > 0u {
             mat = materials[hit.mat_id];
-             // Simple texture fetch logic if needed (tex_id > 0)
-            base_color = mat.base_color.rgb; // Ignore texture atlas for simplicity in this pass for now or impl later
+        }
+        */
+        // Use the hit info's mat_id always (For primary, hit.mat_id was set from GBuffer)
+        // Actually, for primary, `hit` is initialized from GBuffer textures. `mat_primary` was decoded.
+        if depth > 0u {
+            mat = materials[hit.mat_id];
+        }
+
+        var base_color = mat.base_color.rgb;
+
+        // Texture Sampling (Applied to both Primary and Secondary if valid UVs exist)
+        // Primary: UVs are 0 because GBuffer doesn't store them. 
+        //   BUT we are using `gbuffer_albedo` override for Primary! So `base_color` is already textured.
+        // Secondary: We have UVs from interpolation below.
+        if depth > 0u {
+            let tex_color = textureSampleLevel(textures, tex_sampler, hit.uv, i32(mat.tex_id), 0.0);
+            base_color *= tex_color.rgb;
         }
 
         // 1. Emission (MIS)
@@ -516,9 +534,12 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
             let w = 1.0 - u - v;
 
             let local_normal = normalize(v0.normal.xyz * w + v1.normal.xyz * u + v2.normal.xyz * v);
+            let uv_interp = v0.uv.xy * w + v1.uv.xy * u + v2.uv.xy * v;
+
             let w2o = committed.world_to_object;
             let m_inv = mat3x3f(w2o[0], w2o[1], w2o[2]);
             hit.normal = normalize(local_normal * m_inv);
+            hit.uv = uv_interp;
             hit.front_face = committed.front_face;
             hit.ffnormal = select(-hit.normal, hit.normal, hit.front_face);
             hit.t = committed.t;

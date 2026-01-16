@@ -5,6 +5,7 @@ pub struct GBufferPass {
     pub pipeline: wgpu::ComputePipeline,
     pub bind_groups: [wgpu::BindGroup; 2], // Ping-Pongが必要ないなら1つでも可
     pub bind_group_layout: wgpu::BindGroupLayout,
+    pub texture_bind_group: wgpu::BindGroup,
 }
 
 impl GBufferPass {
@@ -17,6 +18,8 @@ impl GBufferPass {
         normal_view: &wgpu::TextureView,
         albedo_view: &wgpu::TextureView,
         motion_view: &wgpu::TextureView,
+        texture_array_view: &wgpu::TextureView,
+        sampler: &wgpu::Sampler,
     ) -> Self {
         // シェーダー読み込み
         let shader = ctx
@@ -138,12 +141,37 @@ impl GBufferPass {
                     ],
                 });
 
+        // Texture BindGroup (Group 1)
+        let bgl1 = ctx
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("GBuffer Texture Bind Group Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2Array,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
         // Pipeline作成
         let pipeline_layout = ctx
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("GBuffer Pipeline Layout"),
-                bind_group_layouts: &[&bind_group_layout], // テクスチャバインドが必要ならBGLを追加
+                bind_group_layouts: &[&bind_group_layout, &bgl1],
                 immediate_size: 0,
             });
 
@@ -158,9 +186,9 @@ impl GBufferPass {
                 cache: None,
             });
 
-        // BindGroup作成
+        // BindGroup 0 (Scene)
         let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("GBuffer Bind Group"),
+            label: Some("GBuffer Bind Group 0"),
             layout: &bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -206,10 +234,27 @@ impl GBufferPass {
             ],
         });
 
+        // BindGroup 1 (Textures)
+        let bind_group1 = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("GBuffer Bind Group 1"),
+            layout: &bgl1,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(texture_array_view),
+                },
+            ],
+        });
+
         Self {
             pipeline,
-            bind_groups: [bind_group.clone(), bind_group], // 便宜上2つ持たせてますが、今回は1つでOK
+            bind_groups: [bind_group.clone(), bind_group],
             bind_group_layout,
+            texture_bind_group: bind_group1,
         }
     }
 
@@ -220,6 +265,7 @@ impl GBufferPass {
         });
         cpass.set_pipeline(&self.pipeline);
         cpass.set_bind_group(0, &self.bind_groups[0], &[]);
+        cpass.set_bind_group(1, &self.texture_bind_group, &[]);
         cpass.dispatch_workgroups((width + 7) / 8, (height + 7) / 8, 1);
     }
 }

@@ -167,6 +167,7 @@ pub struct Renderer {
     pub blit_params_buffer: wgpu::Buffer,
     pub sampler: wgpu::Sampler,
     pub texture_array: wgpu::Texture,
+    pub texture_view: wgpu::TextureView,
 
     pub frame_count: u32,
 }
@@ -280,7 +281,7 @@ impl Renderer {
             },
         );
 
-        let _texture_view = texture_array.create_view(&wgpu::TextureViewDescriptor {
+        let texture_view = texture_array.create_view(&wgpu::TextureViewDescriptor {
             label: Some("Texture Array View"),
             dimension: Some(wgpu::TextureViewDimension::D2Array),
             array_layer_count: Some(2),
@@ -296,6 +297,8 @@ impl Renderer {
             &targets.gbuffer_normal_view,
             &targets.gbuffer_albedo_view,
             &targets.gbuffer_motion_view,
+            &texture_view,
+            &sampler,
         );
 
         let restir_pass = RestirPass::new(
@@ -337,6 +340,7 @@ impl Renderer {
             blit_params_buffer,
             sampler,
             texture_array,
+            texture_view,
             frame_count: 0,
         }
     }
@@ -454,6 +458,8 @@ impl Renderer {
                 vertex_buffer,
                 index_buffer,
                 mesh_info_buffer,
+                &self.texture_view,
+                &self.sampler,
             );
 
             // 3. Post Pass (Tonemap + Accumulate?)

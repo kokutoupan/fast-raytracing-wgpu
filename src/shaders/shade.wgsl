@@ -359,26 +359,11 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         mat_primary.ior = 1.0;
         mat_primary.light_index = -1;
     }
-    
+
+    var mat = mat_primary;
+    var base_color = mat.base_color.rgb;
     // --- Loop ---
     for (var depth = 0u; depth < MAX_DEPTH; depth++) {
-        // Resolve Material
-        var mat = mat_primary;
-        
-        // Use the hit info's mat_id for secondary bounces
-        if depth > 0u {
-            mat = materials[hit.mat_id];
-        }
-
-        var base_color = mat.base_color.rgb;
-
-        // Texture Sampling
-        // Primary (depth=0): Already handled via GBuffer override.
-        // Secondary (depth>0): Manual sampling using interpolated UVs.
-        if depth > 0u {
-            let tex_color = textureSampleLevel(textures, tex_sampler, hit.uv, i32(mat.tex_id), 0.0);
-            base_color *= tex_color.rgb;
-        }
 
         // 1. Emission (MIS)
         if mat.light_index >= 0 {
@@ -540,6 +525,11 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
             hit.pos = origin + next_dir * hit.t; // Use the actual ray origin!
 
             wo = -next_dir;
+
+
+            mat = materials[hit.mat_id];
+            let tex_color = textureSampleLevel(textures, tex_sampler, hit.uv, i32(mat.tex_id), 0.0);
+            base_color = mat.base_color.rgb * tex_color.rgb;
         }
     }
 

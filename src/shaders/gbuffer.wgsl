@@ -53,11 +53,6 @@ struct MeshInfo {
 @group(1) @binding(0) var tex_sampler: sampler;
 @group(1) @binding(1) var textures: texture_2d_array<f32>;
 
-// --- Helpers ---
-struct Ray {
-    origin: vec3f,
-    dir: vec3f
-}
 
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) id: vec3u) {
@@ -121,12 +116,11 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
     let pos = origin + direction * committed.t;
     let mat = materials[mat_id];
-    var base_color = mat.base_color.rgb;
 
     let tex_uv = v0.uv.xy * w_bary + v1.uv.xy * u_bary + v2.uv.xy * v_bary;
 
     let tex_color = textureSampleLevel(textures, tex_sampler, tex_uv, i32(mat.tex_id), 0.0);
-    base_color *= tex_color.rgb;
+    let base_color = mat.base_color.rgb * tex_color.rgb;
 
     // --- Motion Vector Calculation ---
     // Clip Space: -1..1

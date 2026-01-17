@@ -59,24 +59,15 @@ struct Camera {
 @group(1) @binding(1) var<storage, read_write> curr_reservoirs: array<Reservoir>;
 
 // --- Utilities ---
-fn simple_rand(seed: u32) -> f32 {
-    var x = seed;
-    x ^= x << 13u;
-    x ^= x >> 17u;
-    x ^= x << 5u;
-    return f32(x) / 4294967296.0;
+// PCG Hash for better quality random numbers
+fn pcg_hash(seed: u32) -> u32 {
+    var state = seed * 747796405u + 2891336453u;
+    var word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
 }
 
-fn tea(v0: u32, v1: u32) -> u32 {
-    var s0 = 0u;
-    var v0_ = v0;
-    var v1_ = v1;
-    for (var n = 0; n < 4; n++) {
-        s0 += 0x9e3779b9u;
-        v0_ += ((v1_ << 4u) + 0xa341316cu) ^ (v1_ + s0) ^ ((v1_ >> 5u) + 0xc8013ea4u);
-        v1_ += ((v0_ << 4u) + 0xad90777du) ^ (v0_ + s0) ^ ((v0_ >> 5u) + 0x7e95761eu);
-    }
-    return v0_;
+fn rand_float(seed: u32) -> f32 {
+    return f32(pcg_hash(seed)) / 4294967296.0;
 }
 
 fn is_valid_neighbor(
@@ -139,7 +130,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     if id.x >= size.x || id.y >= size.y { return; }
 
     let pixel_idx = id.y * size.x + id.x;
-    let seed = tea(id.x + id.y * size.x, scene_info.y);
+    // Initialize seed with PCG hash of coordinates and frame
+    let seed_init = id.y * size.x + id.x + scene_info.y * 0x9e3779b9u;
+    let seed = pcg_hash(seed_init);
 
     // Read G-Buffer
     let coord = vec2<i32>(id.xy);
@@ -168,14 +161,14 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     // Generate M candidates
     let M_candidates = 8u; // Number of candidates per pixel
     for (var i = 0u; i < M_candidates; i++) {
-        let rnd_light = simple_rand(seed + i * 1143u);
+        let rnd_light = rand_float(seed + i * 1143u);
         let light_idx = min(u32(rnd_light * f32(num_lights)), num_lights - 1u);
 
         let p_hat = target_pdf(light_idx, pos, normal);
         let source_pdf = 1.0 / f32(num_lights); // Uniform sampling
         let w = p_hat / source_pdf;
 
-        update_reservoir(&r, light_idx, w, simple_rand(seed + i * 7919u));
+        update_reservoir(&r, light_idx, w, rand_float(seed + i * 7919u));
     }
     
     // Compute W for the initial reservoir
@@ -221,7 +214,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
             // update_reservoirに渡すweightは `p_hat * W * M`
             let w_prev = p_hat_prev * prev_r.W * f32(prev_r.M);
 
-            update_reservoir(&r, prev_r.y, w_prev, simple_rand(seed + M_candidates * 7919u + 1u));
+            update_reservoir(&r, prev_r.y, w_prev, rand_float(seed + M_candidates * 7919u + 1u));
             
             // サンプル数(M)を加算
             r.M += prev_r.M;

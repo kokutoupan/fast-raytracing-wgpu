@@ -22,11 +22,15 @@ impl Reservoir {
     }
 }
 
-pub struct RestirPass {
+pub struct RestirSpatialPass {
     pub pipeline: wgpu::ComputePipeline,
-    pub reservoir_buffers: [wgpu::Buffer; 2],
-    pub bind_groups0: [wgpu::BindGroup; 2],
-    pub bind_group1: wgpu::BindGroup, // Fixed Flow
+    // No need to own buffers, just views or nothing?
+    // Wait, we need to bind them.
+    // The Renderer owns the buffers. But the pass needs BindGroups.
+    // Let's assume we pass buffers in new() and create bindgroups.
+    pub bind_groups0: [wgpu::BindGroup; 2], // G-Buffer Ping-Pong (Same as Temporal)
+    pub bind_group1: wgpu::BindGroup,       // Fixed Reservoir Flow (Temporal -> Spatial)
+
     pub scene_info_buffer: wgpu::Buffer,
 }
 
@@ -39,7 +43,7 @@ struct SceneInfo {
     pad2: u32,
 }
 
-impl RestirPass {
+impl RestirSpatialPass {
     pub fn new(
         ctx: &WgpuContext,
         scene_resources: &scene::SceneResources,
@@ -48,18 +52,21 @@ impl RestirPass {
         gbuffer_normal: &[wgpu::TextureView; 2],
         gbuffer_albedo: &wgpu::TextureView,
         gbuffer_motion: &wgpu::TextureView,
+        // Buffers passed from Renderer
+        reservoirs_temporal: &wgpu::Buffer, // Read (Input)
+        reservoirs_spatial: &wgpu::Buffer,  // Write (Output)
         render_width: u32,
         render_height: u32,
     ) -> Self {
         let shader = ctx
             .device
-            .create_shader_module(wgpu::include_wgsl!("../shaders/restir.wgsl"));
+            .create_shader_module(wgpu::include_wgsl!("../shaders/restir_spatial.wgsl"));
 
-        // Bind Group 0: GBuffer, Camera, Lights, Scene Info (Same as before)
+        // Bind Group 0: GBuffer, Camera, Lights, Scene Info
         let bgl0 = ctx
             .device
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Restir BGL 0"),
+                label: Some("Restir Spatial BGL 0"),
                 entries: &[
                     // 0: Pos
                     wgpu::BindGroupLayoutEntry {
@@ -163,24 +170,24 @@ impl RestirPass {
                 ],
             });
 
-        // Bind Group 1: Reservoirs
+        // Bind Group 1: Reservoirs (Input -> Output)
         let bgl1 = ctx
             .device
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Restir BGL 1"),
+                label: Some("Restir Spatial BGL 1"),
                 entries: &[
-                    // 0: Prev (Read Only - though we use read_write storage in shader currently)
+                    // 0: Input (Temporal Result) - ReadOnly? No, standard storage for now.
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            ty: wgpu::BufferBindingType::Storage { read_only: true }, // Using read_write for simplicity or maybe readonly
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
                         count: None,
                     },
-                    // 1: Curr (Write)
+                    // 1: Output (Spatial Result)
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -197,7 +204,7 @@ impl RestirPass {
         let pipeline_layout = ctx
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Restir Pipeline Layout"),
+                label: Some("Restir Spatial Pipeline Layout"),
                 bind_group_layouts: &[&bgl0, &bgl1],
                 immediate_size: 0,
             });
@@ -205,7 +212,7 @@ impl RestirPass {
         let pipeline = ctx
             .device
             .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("Restir Pipeline"),
+                label: Some("Restir Spatial Pipeline"),
                 layout: Some(&pipeline_layout),
                 module: &shader,
                 entry_point: Some("main"),
@@ -213,31 +220,9 @@ impl RestirPass {
                 cache: None,
             });
 
-        // Reservoirs
-        let reservoir_size =
-            (render_width * render_height * std::mem::size_of::<Reservoir>() as u32) as u64;
-        let reservoir_buffers = [
-            crate::wgpu_utils::create_buffer(
-                &ctx.device,
-                "Reservoir Buffer 0",
-                reservoir_size,
-                wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_DST
-                    | wgpu::BufferUsages::COPY_SRC,
-            ),
-            crate::wgpu_utils::create_buffer(
-                &ctx.device,
-                "Reservoir Buffer 1",
-                reservoir_size,
-                wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_DST
-                    | wgpu::BufferUsages::COPY_SRC,
-            ),
-        ];
-
         let scene_info_buffer = crate::wgpu_utils::create_buffer_init(
             &ctx.device,
-            "Restir Scene Info",
+            "Restir Spatial Scene Info",
             &[SceneInfo {
                 light_count: 0,
                 frame_count: 0,
@@ -247,25 +232,24 @@ impl RestirPass {
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
 
-        // Bind Group 1 Fixed Flow:
-        // Input: Buffer 1 (Previous Spatial Result)
-        // Output: Buffer 0 (Current Temporal Result)
+        // Bind Group 1: Fixed Flow (Buf0 -> Buf1)
+        // Note: We need to guarantee that Temporal phase writes to Buf0.
         let bind_group1 = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Restir BG1 (Fixed Flow)"),
+            label: Some("Restir Spatial BG1"),
             layout: &bgl1,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: reservoir_buffers[1].as_entire_binding(),
+                    resource: reservoirs_temporal.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: reservoir_buffers[0].as_entire_binding(),
+                    resource: reservoirs_spatial.as_entire_binding(),
                 },
             ],
         });
 
-        // Bind Group 0 Ping-Pong (G-Buffer) - Same as before
+        // Bind Group 0 Ping-Pong (G-Buffer)
         let create_bg0 = |label: &str,
                           curr_pos: &wgpu::TextureView,
                           curr_normal: &wgpu::TextureView,
@@ -318,7 +302,7 @@ impl RestirPass {
         // Frame 0 logic: Write to Gbuffer 0.
         // Restir needs Curr=0, Prev=1.
         let bg0_0 = create_bg0(
-            "Restir BG0 (Curr=0)",
+            "Restir Spatial BG0 (Curr=0)",
             &gbuffer_pos[0],
             &gbuffer_normal[0],
             &gbuffer_pos[1],
@@ -328,7 +312,7 @@ impl RestirPass {
         // Frame 1 logic: Write to Gbuffer 1.
         // Restir needs Curr=1, Prev=0.
         let bg0_1 = create_bg0(
-            "Restir BG0 (Curr=1)",
+            "Restir Spatial BG0 (Curr=1)",
             &gbuffer_pos[1],
             &gbuffer_normal[1],
             &gbuffer_pos[0],
@@ -337,7 +321,6 @@ impl RestirPass {
 
         Self {
             pipeline,
-            reservoir_buffers,
             bind_groups0: [bg0_0, bg0_1],
             bind_group1,
             scene_info_buffer,
@@ -366,7 +349,7 @@ impl RestirPass {
         );
 
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Restir Pass"),
+            label: Some("Restir Spatial Pass"),
             timestamp_writes: None,
         });
         cpass.set_pipeline(&self.pipeline);

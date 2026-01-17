@@ -1,4 +1,4 @@
-use crate::passes::{BlitPass, GBufferPass, PostPass, RestirPass, ShadePass};
+use crate::passes::{BlitPass, GBufferPass, PostPass, RestirPass, RestirSpatialPass, ShadePass};
 use crate::scene;
 use crate::wgpu_ctx::WgpuContext;
 use crate::wgpu_utils::*;
@@ -168,6 +168,7 @@ pub struct Renderer {
     // Passes
     gbuffer_pass: GBufferPass,
     restir_pass: RestirPass,
+    restir_spatial_pass: RestirSpatialPass,
     shade_pass: ShadePass,
     post_pass: PostPass,
     blit_pass: BlitPass,
@@ -326,6 +327,20 @@ impl Renderer {
             render_height,
         );
 
+        let restir_spatial_pass = RestirSpatialPass::new(
+            ctx,
+            scene_resources,
+            camera_buffer,
+            &targets.gbuffer_pos_view,
+            &targets.gbuffer_normal_view,
+            &targets.gbuffer_albedo_view,
+            &targets.gbuffer_motion_view,
+            &restir_pass.reservoir_buffers[0], // Input (Temporal Result)
+            &restir_pass.reservoir_buffers[1], // Output (Spatial Result)
+            render_width,
+            render_height,
+        );
+
         let post_pass = PostPass::new(
             ctx,
             &targets.raw_view,
@@ -345,6 +360,7 @@ impl Renderer {
             window_height: ctx.config.height,
             gbuffer_pass,
             restir_pass,
+            restir_spatial_pass,
             shade_pass,
             post_pass,
             blit_pass,
@@ -430,7 +446,8 @@ impl Renderer {
         let debug_mode = 0;
 
         if debug_mode == 0 {
-            // 1. ReSTIR Pass (Compute reservoirs)
+            // 1. ReSTIR Temporal Pass (Compute reservoirs)
+            // Reads from Buffers[1] (Spatial/Prev Result), Writes to Buffers[0] (Temporal/Curr Result)
             self.restir_pass.execute(
                 &mut encoder,
                 ctx,
@@ -440,16 +457,25 @@ impl Renderer {
                 light_count,
             );
 
+            // 2. ReSTIR Spatial Pass
+            // Reads from Buffers[0] (Temporal Result), Writes to Buffers[1] (Spatial Final Result)
+            self.restir_spatial_pass.execute(
+                &mut encoder,
+                ctx,
+                self.render_width,
+                self.render_height,
+                self.frame_count,
+                light_count,
+            );
+
             // Determine which reservoir buffer is the *output* of the current frame
-            // Frame i: Write GBuffer[i%2].
-            // Restir: Read GBuffer[i%2] (Curr).
-            //         Read Res[(i+1)%2] (Old). Write Res[i%2] (New).
+            // The logic is now fixed:
+            // Temporal -> Writes to 0
+            // Spatial -> Writes to 1
+            // Shade -> Reads from 1
+            let current_reservoir_buffer = &self.restir_pass.reservoir_buffers[1];
 
-            // So Output Reservoir is Res[frame % 2].
-            let current_reservoir_buffer =
-                &self.restir_pass.reservoir_buffers[(self.frame_count % 2) as usize];
-
-            // 2. Shade Pass (Use GBuffer + Reservoirs)
+            // 3. Shade Pass (Use GBuffer + Reservoirs)
             self.shade_pass.execute(
                 &mut encoder,
                 ctx,

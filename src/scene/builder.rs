@@ -92,7 +92,7 @@ impl SceneBuilder {
         queue.submit(std::iter::once(encoder.finish()));
     }
 
-    pub fn add_instance(&mut self, mesh_id: u32, mat_id: u32, transform: Mat4) {
+    pub fn add_instance(&mut self, mesh_id: u32, mat_id: u32, transform: Mat4, mask: u8) {
         let blas = &self.blases[mesh_id as usize];
         let affine = transform.transpose().to_cols_array();
         let instance_id = (mesh_id << 16) | mat_id;

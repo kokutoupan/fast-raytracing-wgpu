@@ -4,17 +4,21 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CameraUniform {
+    pub view_proj: [[f32; 4]; 4],
     pub view_inverse: [[f32; 4]; 4],
     pub proj_inverse: [[f32; 4]; 4],
+    pub view_pos: [f32; 4],
+    pub prev_view_proj: [[f32; 4]; 4],
     pub frame_count: u32,
     pub num_lights: u32,
-    pub _padding: [u32; 2], // 16バイトアライメントのためのパディング
+    pub _padding: [u32; 2],
 }
 
 pub struct CameraController {
     pub position: Vec3,
     pub yaw: f32,
     pub pitch: f32,
+    pub prev_view_proj: Mat4,
 
     // 入力状態
     is_forward_pressed: bool,
@@ -36,6 +40,7 @@ impl CameraController {
             position: Vec3::new(0.0, 0.0, 3.0), // 初期位置: Z=3.0
             yaw: -90.0_f32.to_radians(),        // 初期向き: Zマイナス方向
             pitch: 0.0,
+            prev_view_proj: Mat4::IDENTITY,
 
             is_forward_pressed: false,
             is_backward_pressed: false,
@@ -182,9 +187,22 @@ impl CameraController {
         let view = Mat4::look_at_rh(self.position, self.position + forward, Vec3::Y);
         let proj = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 100.0);
 
+        // 現在のViewProjection行列
+        let view_proj = proj * view;
+
+        // 初回のみ Identity なので防ぐ
+        let prev_view_proj = if self.prev_view_proj == Mat4::IDENTITY {
+            view_proj
+        } else {
+            self.prev_view_proj
+        };
+
         CameraUniform {
+            view_proj: view_proj.to_cols_array_2d(),
             view_inverse: view.inverse().to_cols_array_2d(),
             proj_inverse: proj.inverse().to_cols_array_2d(),
+            view_pos: [self.position.x, self.position.y, self.position.z, 1.0],
+            prev_view_proj: prev_view_proj.to_cols_array_2d(),
             frame_count,
             num_lights,
             _padding: [0; 2],

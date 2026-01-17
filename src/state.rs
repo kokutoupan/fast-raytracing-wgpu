@@ -48,6 +48,7 @@ impl State {
 
         // 2. シーン構築
         let scene_resources = scene::create_restir_scene(&ctx.device, &ctx.queue);
+        // let scene_resources = scene::create_cornell_box(&ctx.device, &ctx.queue);
 
         // 3. カメラ初期化 (最初はデフォルトのアスペクト比で初期化)
         let camera_controller = CameraController::new();
@@ -142,6 +143,12 @@ impl State {
             self.renderer.frame_count,
             self.scene_resources.num_lights,
         );
+
+        // Start Step 182 changes: Update prev_view_proj for the next frame
+        use glam::Mat4;
+        self.camera_controller.prev_view_proj = Mat4::from_cols_array_2d(&camera_uniform.view_proj);
+        // End Step 182 changes
+
         self.ctx.queue.write_buffer(
             &self.camera_buffer,
             0,
@@ -159,7 +166,18 @@ impl State {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        self.renderer.render(&self.ctx, &view)?;
+        self.renderer.render(
+            &self.ctx,
+            &view,
+            &self.camera_buffer,
+            &self.scene_resources.light_buffer,
+            &self.scene_resources.material_buffer,
+            &self.scene_resources.global_vertex_buffer,
+            &self.scene_resources.global_index_buffer,
+            &self.scene_resources.mesh_info_buffer,
+            &self.scene_resources.tlas,
+            self.scene_resources.num_lights,
+        )?;
 
         // 自動スクリーンショット (検証用: 最初の1回だけ)
         const TARGET_SPP: u32 = 64;
@@ -173,7 +191,7 @@ impl State {
         }
 
         if self.screenshot_requested {
-            self.save_screenshot(&self.renderer.post_processed_texture);
+            self.save_screenshot(&self.renderer.targets.post_processed_texture);
             self.screenshot_requested = false;
         }
 

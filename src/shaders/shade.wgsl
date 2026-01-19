@@ -318,9 +318,11 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let pixel_idx = id.y * size.x + id.x;
     
     // Seed RNG
-    init_rng(id.xy, size.x, camera.frame_count); // Ensure camera has frame_count
+    init_rng(id.xy, size.x, camera.frame_count);
 
-    // Initial Path State from G-Buffer
+    // -------------------------------------------------------------------------
+    // 0. Initial State from G-Buffer (Depth = 0)
+    // -------------------------------------------------------------------------
     let pos_w = textureLoad(gbuffer_pos, coord, 0);
     if pos_w.w < 0.0 {
         textureStore(out_color, coord, vec4f(0.0, 0.0, 0.0, 1.0)); // Background
@@ -329,228 +331,236 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let normal_w = textureLoad(gbuffer_normal, coord, 0);
     let albedo_raw = textureLoad(gbuffer_albedo, coord, 0);
 
+    // Construct Primary Hit Info
     var hit: HitInfo;
     hit.pos = pos_w.xyz;
     hit.normal = decode_octahedral_normal(normal_w.xy);
-    hit.front_face = true; // Assumed for primary
+    hit.front_face = true;
     hit.ffnormal = hit.normal;
-    // We don't have primary Hit UV or MatID in standard G-Buffer properly separate?
-    // albedo_raw.a is metallic/mat_id? In gbuffer.wgsl it was metallic.
-    // normal_w.w is roughness.
-    // ShadePass assumes we just use these values directly for primary shading.
-    // For Material consistency in loop, we'll reconstruct a temporary "Material" for depth=0
-    
-    // Loop Variables
-    var accumulated_color = vec3f(0.0);
-    var throughput = vec3f(1.0);
-    var wo = normalize(camera.view_pos.xyz - hit.pos); // View dir goes TO scene? No, wo is usually TO camera.
+    // G-Buffer段階ではHit.tやUVは（デノイザ等で必要なければ）省略されがちなので
+    // ここではシェーディングに必要な最小限を持つ
 
-    var previous_was_diffuse = false;
-    var last_bsdf_pdf = 0.0;
-    
     // Construct Primary Material Proxy
-    var mat_primary: Material;
+    // G-Bufferの情報からマテリアルを復元
+    var mat: Material;
     let mat_id = u32(pos_w.w + 0.1);
     if mat_id < arrayLength(&materials) {
         let mat_static = materials[mat_id];
-        mat_primary = mat_static;
-        // Override with G-Buffer sampled values (which include texture modulation)
-        mat_primary.base_color = vec4f(albedo_raw.rgb, 1.0);
+        mat = mat_static;
+        mat.base_color = vec4f(albedo_raw.rgb, 1.0); // Texture modulation込みの色
     } else {
         // Fallback
-        mat_primary.base_color = vec4f(albedo_raw.rgb, 1.0);
-        mat_primary.roughness = 0.0;
-        mat_primary.metallic = albedo_raw.a;
-        mat_primary.ior = 1.0;
-        mat_primary.light_index = -1;
+        mat.base_color = vec4f(albedo_raw.rgb, 1.0);
+        mat.roughness = 0.0;
+        mat.metallic = albedo_raw.a;
+        mat.ior = 1.0;
+        mat.light_index = -1;
     }
 
-    var mat = mat_primary;
     var base_color = mat.base_color.rgb;
-    // --- Loop ---
-    for (var depth = 0u; depth < MAX_DEPTH; depth++) {
+    var accumulated_color = vec3f(0.0);
+    var throughput = vec3f(1.0);
+    var wo = normalize(camera.view_pos.xyz - hit.pos);
+
+    // State variables for next bounce
+    var next_dir = vec3f(0.0);
+    var last_bsdf_pdf = 0.0;
+    var previous_was_diffuse = false;
+
+    // -------------------------------------------------------------------------
+    // 1. Primary Shading (Emission & ReSTIR NEE)
+    // -------------------------------------------------------------------------
+    
+    // 1-1. Primary Emission
+    if mat.light_index >= 0 {
+        let light = lights[mat.light_index];
+        accumulated_color += light.emission.rgb * light.emission.a;
+        // Primary Hitがライトならそこで終了（あるいは透過などあれば続くが今回は不透過前提）
+        textureStore(out_color, coord, vec4f(accumulated_color, 1.0));
+        return;
+    }
+
+    // 1-2. NEE (ReSTIR)
+    let is_specular = (mat.metallic > 0.01) || (mat.ior > 1.01 || mat.ior < 0.99);
+    if !is_specular {
+        let r = reservoirs[pixel_idx];
+        if r.W > 0.0 {
+            let light_idx = r.y;
+            let light = lights[light_idx];
+            let ls = sample_light(light_idx);
+
+            let offset_pos = hit.pos + hit.ffnormal * 0.001;
+            let L = normalize(ls.pos - offset_pos);
+            let dist = distance(ls.pos, offset_pos);
+
+            let n_dot_l = max(dot(hit.ffnormal, L), 0.0);
+            let l_dot_n = max(dot(-L, ls.normal), 0.0);
+
+            if n_dot_l > 0.0 && l_dot_n > 0.0 {
+                var shadow_rq: ray_query;
+                rayQueryInitialize(&shadow_rq, tlas, RayDesc(0x4u, 0x1u, 0.001, dist - 0.01, offset_pos, L));
+                rayQueryProceed(&shadow_rq);
+                if rayQueryGetCommittedIntersection(&shadow_rq).kind == 0u {
+                    let f = eval_bsdf(hit.ffnormal, L, wo, mat, base_color);
+                    let G = (n_dot_l * l_dot_n) / (dist * dist);
+                    let Ld = ls.emission.rgb * ls.emission.a * f * G * r.W * (1.0 / ls.pdf);
+                    accumulated_color += Ld * throughput;
+                }
+            }
+        }
+        previous_was_diffuse = true;
+    } else {
+        previous_was_diffuse = false;
+    }
+
+    // 1-3. BSDF Sample (Generate next ray)
+    let sc = sample_bsdf(wo, hit, mat, base_color);
+    if sc.weight.x <= 0.0 && sc.weight.y <= 0.0 && sc.weight.z <= 0.0 {
+        textureStore(out_color, coord, vec4f(accumulated_color, 1.0));
+        return;
+    }
+    last_bsdf_pdf = sc.pdf;
+    throughput *= sc.weight;
+    next_dir = sc.wi;
+
+
+    // -------------------------------------------------------------------------
+    // 2. Bounce Loop (Depth 1..MAX_DEPTH)
+    // -------------------------------------------------------------------------
+    for (var depth = 1u; depth < MAX_DEPTH; depth++) {
+        
+        // --- Russian Roulette ---
+        if depth >= 3u {
+            let p = max(throughput.x, max(throughput.y, throughput.z));
+            let survival_prob = clamp(p, 0.05, 0.95);
+            if rand() > survival_prob { break; }
+            throughput /= survival_prob;
+        }
+
+        // --- Trace Next Ray ---
+        var rq: ray_query;
+        let offset_dir = sign(dot(hit.ffnormal, next_dir)) * hit.ffnormal;
+        let origin = hit.pos + offset_dir * 0.001;
+
+        rayQueryInitialize(&rq, tlas, RayDesc(0x0u, 0xFFu, 0.001, 100.0, origin, next_dir));
+        rayQueryProceed(&rq);
+        let committed = rayQueryGetCommittedIntersection(&rq);
+
+        if committed.kind == 0u {
+            // Miss (IBL or Sky color could go here)
+            break;
+        }
+
+        // --- Update Hit Info from Geometry ---
+        let raw_id = committed.instance_custom_data;
+        let mesh_id = raw_id >> 16u;
+        hit.mat_id = raw_id & 0xFFFFu;
+        let mesh_info = mesh_infos[mesh_id];
+        let idx_offset = mesh_info.index_offset + committed.primitive_index * 3u;
+        
+        // Load Indices
+        let i0 = indices[idx_offset + 0u] + mesh_info.vertex_offset;
+        let i1 = indices[idx_offset + 1u] + mesh_info.vertex_offset;
+        let i2 = indices[idx_offset + 2u] + mesh_info.vertex_offset;
+
+        // Load Attributes (Pos分離済み想定)
+        let v0 = attributes[i0];
+        let v1 = attributes[i1];
+        let v2 = attributes[i2];
+
+        // Decode Normals
+        let n0 = decode_octahedral_normal(v0.normal);
+        let n1 = decode_octahedral_normal(v1.normal);
+        let n2 = decode_octahedral_normal(v2.normal);
+
+        // Barycentric Interpolation
+        let u = committed.barycentrics.x;
+        let v = committed.barycentrics.y;
+        let w = 1.0 - u - v;
+
+        let local_normal = normalize(n0 * w + n1 * u + n2 * v);
+        let uv_interp = v0.uv * w + v1.uv * u + v2.uv * v;
+
+        let w2o = committed.world_to_object;
+        let m_inv = mat3x3f(w2o[0], w2o[1], w2o[2]);
+        
+        // Update Hit
+        hit.normal = normalize(local_normal * m_inv);
+        hit.uv = uv_interp;
+        hit.front_face = committed.front_face;
+        hit.ffnormal = select(-hit.normal, hit.normal, hit.front_face);
+        hit.t = committed.t;
+        hit.pos = origin + next_dir * hit.t; // Calculate Pos from Ray
+
+        // Update View Dir & Material
+        wo = -next_dir;
+        mat = materials[hit.mat_id];
+        let tex_color = textureSampleLevel(textures, tex_sampler, hit.uv, i32(mat.tex_id), 0.0);
+        base_color = mat.base_color.rgb * tex_color.rgb;
+
+        // --- Shading (Secondary) ---
 
         // 1. Emission (MIS)
         if mat.light_index >= 0 {
-            if !hit.front_face {
-               break;
+            if hit.front_face {
+                let light = lights[mat.light_index];
+                let Le = light.emission.rgb * light.emission.a;
+                var mis_weight = 1.0;
+                if previous_was_diffuse {
+                    let dist_sq = hit.t * hit.t;
+                    let light_cos = max(dot(hit.ffnormal, -wo), 0.0);
+                    let p_bsdf = last_bsdf_pdf;
+                    let p_nee = (1.0 / light.area) * (dist_sq / light_cos) * (1.0 / f32(camera.num_lights));
+                    if light_cos > 0.001 {
+                        mis_weight = p_bsdf / (p_bsdf + p_nee);
+                    } else { mis_weight = 0.0; }
+                }
+                accumulated_color += Le * throughput * mis_weight;
             }
-            let light = lights[mat.light_index];
-            let Le = light.emission.rgb * light.emission.a;
-            var mis_weight = 1.0;
-            if previous_was_diffuse {
-                let dist_sq = hit.t * hit.t;
-                let light_cos = max(dot(hit.ffnormal, -wo), 0.0); // -wo is ray dir coming in? No WO is ToCamera. 
-                 // We need incoming direction `wi` from previous bounce.
-                 // In loop, `wo` tracks "view direction" for current hit.
-                 // Ray direction was -wo.
-                let p_bsdf = last_bsdf_pdf;
-                let p_nee = (1.0 / light.area) * (dist_sq / light_cos) * (1.0 / f32(camera.num_lights));
-                if light_cos > 0.001 {
-                    mis_weight = p_bsdf / (p_bsdf + p_nee);
-                } else { mis_weight = 0.0; }
-            }
-            accumulated_color += Le * throughput * mis_weight;
             break; // Stop at light
         }
-        
-        // 2. NEE
-        let is_specular = (mat.metallic > 0.01) || (mat.ior > 1.01 || mat.ior < 0.99);
-        if !is_specular {
-            var Ld = vec3f(0.0);
-            if depth == 0u {
-                 // ** ReSTIR NEE **
-                let r = reservoirs[pixel_idx];
-                if r.W > 0.0 {
-                    let light_idx = r.y;
-                    let light = lights[light_idx];
-                     // Sample Light Surface
-                     // Note: We use pixel index for RNG to be consistent? Or rand()? 
-                     // Using rand() is fine since we init RNG at start.
-                    let ls = sample_light(light_idx); // Uses global RNG
 
-                    let offset_pos = hit.pos + hit.ffnormal * 0.001;
-                    let L = normalize(ls.pos - offset_pos);
-                    let dist = distance(ls.pos, offset_pos);
-
+        // 2. NEE (Standard Random Light)
+        let is_specular_bounce = (mat.metallic > 0.01) || (mat.ior > 1.01 || mat.ior < 0.99);
+        if !is_specular_bounce {
+            if camera.num_lights > 0u {
+                let light_idx = u32(rand() * f32(camera.num_lights));
+                if light_idx < camera.num_lights {
+                    let ls = sample_light(light_idx);
+                    let offset_pos_nee = hit.pos + hit.ffnormal * 0.001;
+                    let L = normalize(ls.pos - offset_pos_nee);
+                    let dist = distance(ls.pos, offset_pos_nee);
                     let n_dot_l = max(dot(hit.ffnormal, L), 0.0);
                     let l_dot_n = max(dot(-L, ls.normal), 0.0);
 
                     if n_dot_l > 0.0 && l_dot_n > 0.0 {
                         var shadow_rq: ray_query;
-                        rayQueryInitialize(&shadow_rq, tlas, RayDesc(0x4u, 0x1u, 0.001, dist - 0.01, offset_pos, L));
+                        rayQueryInitialize(&shadow_rq, tlas, RayDesc(0x4u, 0xFFu, 0.001, dist - 0.01, offset_pos_nee, L));
                         rayQueryProceed(&shadow_rq);
                         if rayQueryGetCommittedIntersection(&shadow_rq).kind == 0u {
                             let f = eval_bsdf(hit.ffnormal, L, wo, mat, base_color);
                             let G = (n_dot_l * l_dot_n) / (dist * dist);
-                             // ReSTIR Weight `r.W` includes 1/pdf_choice.
-                             // We multiply by Area (1/pdf_sample) because we sampled surface?
-                             // ReSTIR assumes point light usually. If we sample area, we multiply by Area.
-                             // `ls.pdf` is 1/Area.
-                            Ld = ls.emission.rgb * ls.emission.a * f * G * r.W * (1.0 / ls.pdf);
+                            let pdf_nee = ls.pdf * (1.0 / f32(camera.num_lights));
+                            let p_bsdf = eval_pdf(hit.ffnormal, L, wo, mat);
+                            let mis_weight = pdf_nee / (pdf_nee + p_bsdf);
+                            let Ld = ls.emission.rgb * ls.emission.a * f * G * mis_weight / pdf_nee;
+                            accumulated_color += Ld * throughput;
                         }
                     }
                 }
-                previous_was_diffuse = true;
-            } else {
-                 // ** Standard NEE ** (Random Light)
-                if camera.num_lights > 0u {
-                    let light_idx = u32(rand() * f32(camera.num_lights));
-                    if light_idx < camera.num_lights {
-                        let ls = sample_light(light_idx);
-                        let offset_pos = hit.pos + hit.ffnormal * 0.001;
-                        let L = normalize(ls.pos - offset_pos);
-                        let dist = distance(ls.pos, offset_pos);
-                        let n_dot_l = max(dot(hit.ffnormal, L), 0.0);
-                        let l_dot_n = max(dot(-L, ls.normal), 0.0);
-
-                        if n_dot_l > 0.0 && l_dot_n > 0.0 {
-                            var shadow_rq: ray_query;
-                            rayQueryInitialize(&shadow_rq, tlas, RayDesc(0x4u, 0xFFu, 0.001, dist - 0.01, offset_pos, L));
-                            rayQueryProceed(&shadow_rq);
-                            if rayQueryGetCommittedIntersection(&shadow_rq).kind == 0u {
-                                let f = eval_bsdf(hit.ffnormal, L, wo, mat, base_color);
-                                let G = (n_dot_l * l_dot_n) / (dist * dist);
-                                let pdf_nee = ls.pdf * (1.0 / f32(camera.num_lights)); 
-                                 // MIS Weight for NEE
-                                 // p_bsdf? We haven't sampled BSDF yet.
-                                 // Standard NEE estimator: Le * f * G / pdf_nee.
-                                 // With MIS: weight = p_nee / (p_nee + p_bsdf).
-                                 // But commonly we just use NEE + BSDF(weighted).
-                                 // Let's use simple NEE here with heuristic?
-                                 // If we do NEE, we weight it against potential BSDF hit.
-                                let p_bsdf = eval_pdf(hit.ffnormal, L, wo, mat);
-                                let mis_weight = pdf_nee / (pdf_nee + p_bsdf);
-
-                                Ld = ls.emission.rgb * ls.emission.a * f * G * mis_weight / pdf_nee;
-                            }
-                        }
-                    }
-                }
-                previous_was_diffuse = true;
             }
-            accumulated_color += Ld * throughput;
+            previous_was_diffuse = true;
         } else {
             previous_was_diffuse = false;
         }
 
-        // 3. BSDF Sample & Bounce
-        let sc = sample_bsdf(wo, hit, mat, base_color);
-        if sc.weight.x <= 0.0 && sc.weight.y <= 0.0 && sc.weight.z <= 0.0 { break; }
+        // 3. BSDF Sample
+        let sc_bounce = sample_bsdf(wo, hit, mat, base_color);
+        if sc_bounce.weight.x <= 0.0 && sc_bounce.weight.y <= 0.0 && sc_bounce.weight.z <= 0.0 { break; }
 
-        last_bsdf_pdf = sc.pdf;
-        throughput *= sc.weight;
-        let next_dir = sc.wi;
-
-        // --- ロシアン・ルーレット ---
-        if depth >= 3u {
-            let p = max(throughput.x, max(throughput.y, throughput.z));
-            let survival_prob = clamp(p, 0.05, 0.95);
-
-            if rand() > survival_prob {
-                break;
-            }
-            // 生き残った場合は、確率の分だけ輝度を持ち上げてバイアスを防ぐ
-            throughput /= survival_prob;
-        }
-        
-        // Trace Next Ray
-        if depth < MAX_DEPTH - 1u {
-            var rq: ray_query;
-            // Offset logic: Push away from surface in direction of travel
-            // Reflection (dot>0) -> Push Out (+ffnormal)
-            // Refraction (dot<0) -> Push In (-ffnormal)
-            let offset_dir = sign(dot(hit.ffnormal, next_dir)) * hit.ffnormal;
-            let origin = hit.pos + offset_dir * 0.001;
-
-            rayQueryInitialize(&rq, tlas, RayDesc(0u, 0xFFu, 0.001, 100.0, origin, next_dir));
-            rayQueryProceed(&rq);
-            let committed = rayQueryGetCommittedIntersection(&rq);
-
-            if committed.kind == 0u {
-                 // Miss (Sky color?)
-                 break;
-            }
-             
-             // Update Hit Info
-            let raw_id = committed.instance_custom_data;
-            let mesh_id = raw_id >> 16u;
-            hit.mat_id = raw_id & 0xFFFFu;
-            let mesh_info = mesh_infos[mesh_id];
-            let idx_offset = mesh_info.index_offset + committed.primitive_index * 3u;
-            let i0 = indices[idx_offset + 0u] + mesh_info.vertex_offset;
-            let i1 = indices[idx_offset + 1u] + mesh_info.vertex_offset;
-            let i2 = indices[idx_offset + 2u] + mesh_info.vertex_offset;
-            let v0 = attributes[i0];
-            let v1 = attributes[i1];
-            let v2 = attributes[i2];
-
-            let n0 = decode_octahedral_normal(v0.normal);
-            let n1 = decode_octahedral_normal(v1.normal);
-            let n2 = decode_octahedral_normal(v2.normal);
-
-            let u = committed.barycentrics.x;
-            let v = committed.barycentrics.y;
-            let w = 1.0 - u - v;
-
-            let local_normal = normalize(n0 * w + n1 * u + n2 * v);
-            let uv_interp = v0.uv * w + v1.uv * u + v2.uv * v;
-
-            let w2o = committed.world_to_object;
-            let m_inv = mat3x3f(w2o[0], w2o[1], w2o[2]);
-            hit.normal = normalize(local_normal * m_inv);
-            hit.uv = uv_interp;
-            hit.front_face = committed.front_face;
-            hit.ffnormal = select(-hit.normal, hit.normal, hit.front_face);
-            hit.t = committed.t;
-            hit.pos = origin + next_dir * hit.t; // Use the actual ray origin!
-
-            wo = -next_dir;
-
-            mat = materials[hit.mat_id];
-            let tex_color = textureSampleLevel(textures, tex_sampler, hit.uv, i32(mat.tex_id), 0.0);
-            base_color = mat.base_color.rgb * tex_color.rgb;
-        }
+        last_bsdf_pdf = sc_bounce.pdf;
+        throughput *= sc_bounce.weight;
+        next_dir = sc_bounce.wi;
     }
 
     textureStore(out_color, coord, vec4f(accumulated_color, 1.0));

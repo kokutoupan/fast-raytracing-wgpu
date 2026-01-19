@@ -476,6 +476,18 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         last_bsdf_pdf = sc.pdf;
         throughput *= sc.weight;
         let next_dir = sc.wi;
+
+        // --- ロシアン・ルーレット ---
+        if depth >= 3u {
+            let p = max(throughput.x, max(throughput.y, throughput.z));
+            let survival_prob = clamp(p, 0.05, 0.95);
+
+            if rand() > survival_prob {
+                break;
+            }
+            // 生き残った場合は、確率の分だけ輝度を持ち上げてバイアスを防ぐ
+            throughput /= survival_prob;
+        }
         
         // Trace Next Ray
         if depth < MAX_DEPTH - 1u {
@@ -525,7 +537,6 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
             hit.pos = origin + next_dir * hit.t; // Use the actual ray origin!
 
             wo = -next_dir;
-
 
             mat = materials[hit.mat_id];
             let tex_color = textureSampleLevel(textures, tex_sampler, hit.uv, i32(mat.tex_id), 0.0);

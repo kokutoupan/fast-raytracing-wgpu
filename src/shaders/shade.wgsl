@@ -331,7 +331,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
     var hit: HitInfo;
     hit.pos = pos_w.xyz;
-    hit.normal = normal_w.xyz;
+    hit.normal = decode_octahedral_normal(normal_w.xy);
     hit.front_face = true; // Assumed for primary
     hit.ffnormal = hit.normal;
     // We don't have primary Hit UV or MatID in standard G-Buffer properly separate?

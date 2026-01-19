@@ -70,6 +70,14 @@ fn rand_float(seed: u32) -> f32 {
     return f32(pcg_hash(seed)) / 4294967296.0;
 }
 
+fn decode_octahedral_normal(e: vec2f) -> vec3f {
+    var n = vec3f(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+    let t = max(-n.z, 0.0);
+    n.x += select(t, -t, n.x >= 0.0);
+    n.y += select(t, -t, n.y >= 0.0);
+    return normalize(n);
+}
+
 fn is_valid_neighbor(
     curr_pos: vec3f, curr_normal: vec3f, curr_mat: u32,
     prev_pos: vec3f, prev_normal: vec3f, prev_mat: u32,
@@ -138,6 +146,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let coord = vec2<i32>(id.xy);
     let pos_w = textureLoad(gbuffer_pos, coord, 0);
     let normal_w = textureLoad(gbuffer_normal, coord, 0);
+    let normal = decode_octahedral_normal(normal_w.xy);
 
     if pos_w.w < 0.0 {
         // Background - clear reservoir
@@ -147,7 +156,6 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     }
 
     let pos = pos_w.xyz;
-    let normal = normal_w.xyz;
     let mat_id = i32(pos_w.w + 0.5);
     let num_lights = scene_info.x;
 
@@ -196,10 +204,11 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         // 過去のG-Bufferを読んでチェック
         let prev_pos_data = textureLoad(prev_gbuffer_pos, prev_id_xy, 0);
         let prev_normal_data = textureLoad(prev_gbuffer_normal, prev_id_xy, 0);
+        let prev_normal = decode_octahedral_normal(prev_normal_data.xy);
 
         let prev_mat_id = bitcast<u32>(prev_pos_data.w);
 
-        if is_valid_neighbor(pos, normal, u32(pos_w.w + 0.5), prev_pos_data.xyz, prev_normal_data.xyz, prev_mat_id, camera.view_pos.xyz) {
+        if is_valid_neighbor(pos, normal, u32(pos_w.w + 0.5), prev_pos_data.xyz, prev_normal, prev_mat_id, camera.view_pos.xyz) {
             // ★合格！過去のReservoirをマージ
             var prev_r = prev_reservoirs[prev_pixel_idx];
             

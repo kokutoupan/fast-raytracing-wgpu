@@ -36,6 +36,24 @@ fn decode_octahedral_normal(e: vec2f) -> vec3f {
     return normalize(n);
 }
 
+fn encode_octahedral_normal(n: vec3f) -> vec2f {
+    let l1 = abs(n.x) + abs(n.y) + abs(n.z);
+    let res_base = n.xy * (1.0 / max(l1, 1e-6));
+    let res = select(vec2f(0.0), res_base, l1 > 0.0);
+
+    if n.z < 0.0 {
+        let x = res.x;
+        let y = res.y;
+        let sign_x = select(-1.0, 1.0, x >= 0.0);
+        let sign_y = select(-1.0, 1.0, y >= 0.0);
+        return vec2f(
+            (1.0 - abs(y)) * sign_x,
+            (1.0 - abs(x)) * sign_y
+        );
+    }
+    return res;
+}
+
 struct MeshInfo {
     vertex_offset: u32,
     index_offset: u32,
@@ -52,7 +70,7 @@ struct MeshInfo {
 
 // Output Textures
 @group(0) @binding(6) var out_pos: texture_storage_2d<rgba32float, write>;
-@group(0) @binding(7) var out_normal: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(7) var out_normal: texture_storage_2d<rg32float, write>;
 @group(0) @binding(8) var out_albedo: texture_storage_2d<rgba8unorm, write>;
 
 @group(0) @binding(9) var out_motion: texture_storage_2d<rg32float, write>;
@@ -152,12 +170,13 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let motion = prev_uv - curr_uv;
 
     // 4. Store G-Buffer
-    // Pos.w に Material ID を入れる (User Request)
+    // Pos.w に Material ID を入れる
     let coord = vec2<i32>(id.xy);
-    textureStore(out_pos, coord, vec4f(pos, f32(mat_id))); 
-    // Normal.w に Roughness
-    textureStore(out_normal, coord, vec4f(ffnormal, 0.0));
-     // Albedo.w に Metallic
+    textureStore(out_pos, coord, vec4f(pos, f32(mat_id)));
+
+    let encoded_n = encode_octahedral_normal(ffnormal);
+    textureStore(out_normal, coord, vec4f(encoded_n, 0.0, 0.0));
+
     textureStore(out_albedo, coord, vec4f(base_color, 0.0));
     // Motion
     textureStore(out_motion, coord, vec4f(motion, 0.0, 0.0));

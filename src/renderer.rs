@@ -118,8 +118,8 @@ impl RenderTargets {
             create_storage_tex("GBuffer Position 1", wgpu::TextureFormat::Rgba32Float),
         ];
         let gbuffer_normal = [
-            create_storage_tex("GBuffer Normal 0", wgpu::TextureFormat::Rgba32Float),
-            create_storage_tex("GBuffer Normal 1", wgpu::TextureFormat::Rgba32Float),
+            create_storage_tex("GBuffer Normal 0", wgpu::TextureFormat::Rg32Float),
+            create_storage_tex("GBuffer Normal 1", wgpu::TextureFormat::Rg32Float),
         ];
         let gbuffer_albedo = create_storage_tex("GBuffer Albedo", wgpu::TextureFormat::Rgba8Unorm);
         let gbuffer_motion = create_storage_tex("GBuffer Motion", wgpu::TextureFormat::Rg32Float);

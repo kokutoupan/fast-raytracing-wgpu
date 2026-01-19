@@ -67,6 +67,14 @@ fn rand_float(seed: u32) -> f32 {
     return f32(pcg_hash(seed)) / 4294967296.0;
 }
 
+fn decode_octahedral_normal(e: vec2f) -> vec3f {
+    var n = vec3f(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+    let t = max(-n.z, 0.0);
+    n.x += select(t, -t, n.x >= 0.0);
+    n.y += select(t, -t, n.y >= 0.0);
+    return normalize(n);
+}
+
 fn is_valid_neighbor(
     curr_pos: vec3f, curr_normal: vec3f, curr_mat: u32,
     prev_pos: vec3f, prev_normal: vec3f, prev_mat: u32,
@@ -145,7 +153,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     }
 
     let pos = pos_w.xyz;
-    let normal = normal_w.xyz;
+    let normal = decode_octahedral_normal(normal_w.xy);
     let mat_id = i32(pos_w.w + 0.5);
     let num_lights = scene_info.x;
 
@@ -187,7 +195,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         if neighbor_pos_w.w < 0.0 { continue; }
 
         let neighbor_pos = neighbor_pos_w.xyz;
-        let neighbor_normal = neighbor_normal_w.xyz;
+        let neighbor_normal = decode_octahedral_normal(neighbor_normal_w.xy);
         let neighbor_mat_id = u32(neighbor_pos_w.w + 0.5);
 
         if !is_valid_neighbor(pos, normal, u32(pos_w.w + 0.5), neighbor_pos, neighbor_normal, neighbor_mat_id, camera.view_pos.xyz) {

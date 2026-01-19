@@ -112,7 +112,7 @@ impl GBufferPass {
                             visibility: wgpu::ShaderStages::COMPUTE,
                             ty: wgpu::BindingType::StorageTexture {
                                 access: wgpu::StorageTextureAccess::WriteOnly,
-                                format: wgpu::TextureFormat::Rgba32Float,
+                                format: wgpu::TextureFormat::Rg32Float,
                                 view_dimension: wgpu::TextureViewDimension::D2,
                             },
                             count: None,

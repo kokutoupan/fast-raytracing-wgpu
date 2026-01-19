@@ -45,8 +45,16 @@ struct Material {
 }
 
 struct VertexAttributes {
-    normal: vec4f,
-    uv: vec4f,
+    normal: vec2f,
+    uv: vec2f,
+}
+
+fn decode_octahedral_normal(e: vec2f) -> vec3f {
+    var n = vec3f(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+    let t = max(-n.z, 0.0);
+    n.x += select(t, -t, n.x >= 0.0);
+    n.y += select(t, -t, n.y >= 0.0);
+    return normalize(n);
 }
 
 struct MeshInfo {
@@ -517,12 +525,16 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
             let v1 = attributes[i1];
             let v2 = attributes[i2];
 
+            let n0 = decode_octahedral_normal(v0.normal);
+            let n1 = decode_octahedral_normal(v1.normal);
+            let n2 = decode_octahedral_normal(v2.normal);
+
             let u = committed.barycentrics.x;
             let v = committed.barycentrics.y;
             let w = 1.0 - u - v;
 
-            let local_normal = normalize(v0.normal.xyz * w + v1.normal.xyz * u + v2.normal.xyz * v);
-            let uv_interp = v0.uv.xy * w + v1.uv.xy * u + v2.uv.xy * v;
+            let local_normal = normalize(n0 * w + n1 * u + n2 * v);
+            let uv_interp = v0.uv * w + v1.uv * u + v2.uv * v;
 
             let w2o = committed.world_to_object;
             let m_inv = mat3x3f(w2o[0], w2o[1], w2o[2]);

@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
-// 頂点属性データ (32バイト) - Shaderに送る用
+// 頂点属性データ (16バイト) - Shaderに送る用
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct VertexAttributes {
-    pub normal: [f32; 4], // vec4f alignment
-    pub uv: [f32; 4],     // uv + padding
+    pub normal: [f32; 2], // Octahedral encoded
+    pub uv: [f32; 2],     // uv
 }
 
 pub struct Geometry {
@@ -51,31 +51,57 @@ fn build_blas(
     }
 }
 
+// --- Helper for Octahedral Encoding ---
+fn encode_octahedral_normal(n: [f32; 3]) -> [f32; 2] {
+    let nx = n[0];
+    let ny = n[1];
+    let nz = n[2];
+    let l1_norm = nx.abs() + ny.abs() + nz.abs();
+    let res = if l1_norm > 0.0 {
+        [nx / l1_norm, ny / l1_norm]
+    } else {
+        [0.0, 0.0]
+    };
+
+    if nz < 0.0 {
+        let x = res[0];
+        let y = res[1];
+        let sign_x = if x >= 0.0 { 1.0 } else { -1.0 };
+        let sign_y = if y >= 0.0 { 1.0 } else { -1.0 };
+        [(1.0 - y.abs()) * sign_x, (1.0 - x.abs()) * sign_y]
+    } else {
+        res
+    }
+}
+
 // --- ヘルパー関数: 平面(Quad)のBLASを作成 ---
 pub fn create_plane_blas(device: &wgpu::Device) -> Geometry {
     // 1x1 の平面 (XZ平面, 中心0,0)
     let positions = vec![
-        [-0.5, 0.0, 0.5, 1.0],  // 左手前
-        [0.5, 0.0, 0.5, 1.0],   // 右手前
-        [-0.5, 0.0, -0.5, 1.0], // 左奥
-        [0.5, 0.0, -0.5, 1.0],  // 右奥
+        [-0.5, 0.0, 0.5, 1.0],
+        [0.5, 0.0, 0.5, 1.0],
+        [-0.5, 0.0, -0.5, 1.0],
+        [0.5, 0.0, -0.5, 1.0],
     ];
+    let normal = [0.0, 1.0, 0.0];
+    let encoded_normal = encode_octahedral_normal(normal);
+
     let attributes = vec![
         VertexAttributes {
-            normal: [0.0, 1.0, 0.0, 0.0],
-            uv: [0.0, 1.0, 0.0, 0.0],
+            normal: encoded_normal,
+            uv: [0.0, 1.0],
         },
         VertexAttributes {
-            normal: [0.0, 1.0, 0.0, 0.0],
-            uv: [1.0, 1.0, 0.0, 0.0],
+            normal: encoded_normal,
+            uv: [1.0, 1.0],
         },
         VertexAttributes {
-            normal: [0.0, 1.0, 0.0, 0.0],
-            uv: [0.0, 0.0, 0.0, 0.0],
+            normal: encoded_normal,
+            uv: [0.0, 0.0],
         },
         VertexAttributes {
-            normal: [0.0, 1.0, 0.0, 0.0],
-            uv: [1.0, 0.0, 0.0, 0.0],
+            normal: encoded_normal,
+            uv: [1.0, 0.0],
         },
     ];
     let indices: Vec<u32> = vec![0, 1, 2, 2, 1, 3]; // Triangle List
@@ -136,30 +162,30 @@ pub fn create_cube_blas(device: &wgpu::Device) -> Geometry {
     ];
 
     for (normal, v0, v1, v2, v3) in sides {
-        let n = [normal[0], normal[1], normal[2], 0.0];
+        let encoded_normal = encode_octahedral_normal(normal);
 
         positions.push([v0[0], v0[1], v0[2], 1.0]);
         attributes.push(VertexAttributes {
-            normal: n,
-            uv: [0.0, 1.0, 0.0, 0.0],
+            normal: encoded_normal,
+            uv: [0.0, 1.0],
         });
 
         positions.push([v1[0], v1[1], v1[2], 1.0]);
         attributes.push(VertexAttributes {
-            normal: n,
-            uv: [1.0, 1.0, 0.0, 0.0],
+            normal: encoded_normal,
+            uv: [1.0, 1.0],
         });
 
         positions.push([v2[0], v2[1], v2[2], 1.0]);
         attributes.push(VertexAttributes {
-            normal: n,
-            uv: [1.0, 0.0, 0.0, 0.0],
+            normal: encoded_normal,
+            uv: [1.0, 0.0],
         });
 
         positions.push([v3[0], v3[1], v3[2], 1.0]);
         attributes.push(VertexAttributes {
-            normal: n,
-            uv: [0.0, 0.0, 0.0, 0.0],
+            normal: encoded_normal,
+            uv: [0.0, 0.0],
         });
 
         indices.push(v_idx);
@@ -187,11 +213,12 @@ pub fn create_sphere_blas(device: &wgpu::Device, subdivisions: u32) -> Geometry 
         let length = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
         let n = [p[0] / length, p[1] / length, p[2] / length];
         let pos = [n[0] * 0.5, n[1] * 0.5, n[2] * 0.5, 1.0];
+        let encoded_normal = encode_octahedral_normal(n);
 
         positions.push(pos);
         attributes.push(VertexAttributes {
-            normal: [n[0], n[1], n[2], 0.0],
-            uv: [0.0, 0.0, 0.0, 0.0], // TODO: Spherical mapping
+            normal: encoded_normal,
+            uv: [0.0, 0.0], // TODO: Spherical mapping
         });
         positions.len() as u32 - 1
     };
@@ -282,11 +309,12 @@ fn get_midpoint(
 
     let length = (mid[0] * mid[0] + mid[1] * mid[1] + mid[2] * mid[2]).sqrt();
     let n = [mid[0] / length, mid[1] / length, mid[2] / length];
+    let encoded_normal = encode_octahedral_normal(n);
 
     positions.push([n[0] * 0.5, n[1] * 0.5, n[2] * 0.5, 1.0]);
     attributes.push(VertexAttributes {
-        normal: [n[0], n[1], n[2], 0.0],
-        uv: [0.0, 0.0, 0.0, 0.0],
+        normal: encoded_normal,
+        uv: [0.0, 0.0],
     });
 
     let index = positions.len() as u32 - 1;
@@ -295,7 +323,6 @@ fn get_midpoint(
 }
 
 use glam::Vec3;
-use wgpu::util::DeviceExt;
 
 pub fn create_crystal_blas(device: &wgpu::Device) -> Geometry {
     let mut positions = Vec::new();
@@ -323,25 +350,26 @@ pub fn create_crystal_blas(device: &wgpu::Device) -> Geometry {
         let edge1 = p1 - p0;
         let edge2 = p2 - p0;
         let n = edge1.cross(edge2).normalize();
+        let encoded_normal = encode_octahedral_normal([n.x, n.y, n.z]);
 
         let base = positions.len() as u32;
 
         positions.push([p0.x, p0.y, p0.z, 1.0]);
         attributes.push(VertexAttributes {
-            normal: [n.x, n.y, n.z, 0.0],
-            uv: [0.0; 4],
+            normal: encoded_normal,
+            uv: [0.0; 2],
         });
 
         positions.push([p1.x, p1.y, p1.z, 1.0]);
         attributes.push(VertexAttributes {
-            normal: [n.x, n.y, n.z, 0.0],
-            uv: [0.0; 4],
+            normal: encoded_normal,
+            uv: [0.0; 2],
         });
 
         positions.push([p2.x, p2.y, p2.z, 1.0]);
         attributes.push(VertexAttributes {
-            normal: [n.x, n.y, n.z, 0.0],
-            uv: [0.0; 4],
+            normal: encoded_normal,
+            uv: [0.0; 2],
         });
 
         indices.push(base);

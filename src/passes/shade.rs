@@ -218,7 +218,7 @@ impl ShadePass {
         current_reservoirs: &wgpu::Buffer,
         tlas: &wgpu::Tlas,
         material_buffer: &wgpu::Buffer,
-        vertex_buffer: &wgpu::Buffer,
+        attribute_buffer: &wgpu::Buffer,
         index_buffer: &wgpu::Buffer,
         mesh_info_buffer: &wgpu::Buffer,
         texture_view: &wgpu::TextureView,
@@ -267,7 +267,7 @@ impl ShadePass {
                 },
                 wgpu::BindGroupEntry {
                     binding: 9,
-                    resource: vertex_buffer.as_entire_binding(),
+                    resource: attribute_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 10,

@@ -10,7 +10,7 @@ pub struct MeshInfo {
 #[allow(dead_code)]
 pub struct SceneResources {
     pub tlas: wgpu::Tlas,
-    pub global_vertex_buffer: wgpu::Buffer,
+    pub global_attribute_buffer: wgpu::Buffer,
     pub global_index_buffer: wgpu::Buffer,
     pub mesh_info_buffer: wgpu::Buffer,
     pub blases: Vec<wgpu::Blas>,

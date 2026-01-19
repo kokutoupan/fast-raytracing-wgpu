@@ -1,13 +1,13 @@
 use super::material::Material;
 use super::resources::{MeshInfo, SceneResources};
-use crate::geometry::{self, Vertex};
+use crate::geometry::{self, VertexAttributes};
 use crate::scene::light::LightUniform;
 use glam::{Mat4, Vec3};
 use wgpu::util::DeviceExt;
 
 pub struct SceneBuilder {
     pub materials: Vec<Material>,
-    pub vertices: Vec<Vertex>,
+    pub attributes: Vec<VertexAttributes>,
     pub indices: Vec<u32>,
     pub mesh_infos: Vec<MeshInfo>,
     pub instances: Vec<Option<wgpu::TlasInstance>>,
@@ -19,7 +19,7 @@ impl SceneBuilder {
     pub fn new() -> Self {
         Self {
             materials: Vec::new(),
-            vertices: Vec::new(),
+            attributes: Vec::new(),
             indices: Vec::new(),
             mesh_infos: Vec::new(),
             instances: Vec::new(),
@@ -37,10 +37,10 @@ impl SceneBuilder {
     pub fn add_mesh(&mut self, geo: geometry::Geometry) -> u32 {
         let id = self.mesh_infos.len() as u32;
 
-        let v_offset = self.vertices.len() as u32;
+        let v_offset = self.attributes.len() as u32; // Use attributes len
         let i_offset = self.indices.len() as u32;
 
-        self.vertices.extend_from_slice(&geo.vertices);
+        self.attributes.extend_from_slice(&geo.attributes);
         self.indices.extend_from_slice(&geo.indices);
 
         self.mesh_infos.push(MeshInfo {
@@ -60,7 +60,7 @@ impl SceneBuilder {
         for geo in geos {
             let v_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Temp BLAS Vertex Buffer"),
-                contents: bytemuck::cast_slice(&geo.vertices),
+                contents: bytemuck::cast_slice(&geo.positions), // Use positions!
                 usage: wgpu::BufferUsages::BLAS_INPUT,
             });
             let i_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -77,7 +77,7 @@ impl SceneBuilder {
                             size: &geo.desc,
                             vertex_buffer: &v_buf,
                             first_vertex: 0,
-                            vertex_stride: std::mem::size_of::<Vertex>() as u64,
+                            vertex_stride: 16, // vec4f position
                             index_buffer: Some(&i_buf),
                             first_index: Some(0),
                             transform_buffer: None,
@@ -92,7 +92,7 @@ impl SceneBuilder {
         queue.submit(std::iter::once(encoder.finish()));
     }
 
-    pub fn add_instance(&mut self, mesh_id: u32, mat_id: u32, transform: Mat4, mask: u8) {
+    pub fn add_instance(&mut self, mesh_id: u32, mat_id: u32, transform: Mat4, _mask: u8) {
         let blas = &self.blases[mesh_id as usize];
         let affine = transform.transpose().to_cols_array();
         let instance_id = (mesh_id << 16) | mat_id;
@@ -147,11 +147,12 @@ impl SceneBuilder {
     }
 
     pub fn build(mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> SceneResources {
-        let global_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Global Vertex Buffer"),
-            contents: bytemuck::cast_slice(&self.vertices),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let global_attribute_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Global Attribute Buffer"),
+                contents: bytemuck::cast_slice(&self.attributes),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
         let global_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Global Index Buffer"),
             contents: bytemuck::cast_slice(&self.indices),
@@ -193,7 +194,7 @@ impl SceneBuilder {
 
         SceneResources {
             tlas,
-            global_vertex_buffer,
+            global_attribute_buffer,
             global_index_buffer,
             mesh_info_buffer,
             blases: self.blases,

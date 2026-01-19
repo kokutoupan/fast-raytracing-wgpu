@@ -44,8 +44,7 @@ struct Material {
     tex_id: u32,
 }
 
-struct Vertex {
-    pos: vec4f,
+struct VertexAttributes {
     normal: vec4f,
     uv: vec4f,
 }
@@ -91,7 +90,7 @@ struct HitInfo {
 @group(0) @binding(6) var<storage, read> reservoirs: array<Reservoir>;
 @group(0) @binding(7) var tlas: acceleration_structure;
 @group(0) @binding(8) var<storage, read> materials: array<Material>;
-@group(0) @binding(9) var<storage, read> vertices: array<Vertex>;
+@group(0) @binding(9) var<storage, read> attributes: array<VertexAttributes>;
 @group(0) @binding(10) var<storage, read> indices: array<u32>;
 @group(0) @binding(11) var<storage, read> mesh_infos: array<MeshInfo>;
 
@@ -349,12 +348,10 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         mat_primary = mat_static;
         // Override with G-Buffer sampled values (which include texture modulation)
         mat_primary.base_color = vec4f(albedo_raw.rgb, 1.0);
-        mat_primary.roughness = normal_w.w;
-        mat_primary.metallic = albedo_raw.a;
     } else {
         // Fallback
         mat_primary.base_color = vec4f(albedo_raw.rgb, 1.0);
-        mat_primary.roughness = normal_w.w;
+        mat_primary.roughness = 0.0;
         mat_primary.metallic = albedo_raw.a;
         mat_primary.ior = 1.0;
         mat_primary.light_index = -1;
@@ -516,9 +513,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
             let i0 = indices[idx_offset + 0u] + mesh_info.vertex_offset;
             let i1 = indices[idx_offset + 1u] + mesh_info.vertex_offset;
             let i2 = indices[idx_offset + 2u] + mesh_info.vertex_offset;
-            let v0 = vertices[i0];
-            let v1 = vertices[i1];
-            let v2 = vertices[i2];
+            let v0 = attributes[i0];
+            let v1 = attributes[i1];
+            let v2 = attributes[i2];
 
             let u = committed.barycentrics.x;
             let v = committed.barycentrics.y;

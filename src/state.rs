@@ -172,7 +172,7 @@ impl State {
             &self.camera_buffer,
             &self.scene_resources.light_buffer,
             &self.scene_resources.material_buffer,
-            &self.scene_resources.global_vertex_buffer,
+            &self.scene_resources.global_attribute_buffer,
             &self.scene_resources.global_index_buffer,
             &self.scene_resources.mesh_info_buffer,
             &self.scene_resources.tlas,

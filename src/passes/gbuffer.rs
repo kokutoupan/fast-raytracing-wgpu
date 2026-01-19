@@ -207,7 +207,7 @@ impl GBufferPass {
                     },
                     wgpu::BindGroupEntry {
                         binding: 3,
-                        resource: scene_resources.global_vertex_buffer.as_entire_binding(),
+                        resource: scene_resources.global_attribute_buffer.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 4,

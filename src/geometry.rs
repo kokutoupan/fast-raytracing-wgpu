@@ -1,17 +1,17 @@
 use std::collections::HashMap;
 
-// 頂点データ (48バイト)
+// 頂点属性データ (32バイト) - Shaderに送る用
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Vertex {
-    pub pos: [f32; 4],    // vec4f alignment
+pub struct VertexAttributes {
     pub normal: [f32; 4], // vec4f alignment
     pub uv: [f32; 4],     // uv + padding
 }
 
 pub struct Geometry {
     pub blas: wgpu::Blas,
-    pub vertices: Vec<Vertex>,
+    pub positions: Vec<[f32; 4]>,
+    pub attributes: Vec<VertexAttributes>,
     pub indices: Vec<u32>,
     pub desc: wgpu::BlasTriangleGeometrySizeDescriptor,
 }
@@ -19,12 +19,13 @@ pub struct Geometry {
 fn build_blas(
     device: &wgpu::Device,
     label: &str,
-    vertices: Vec<Vertex>,
+    positions: Vec<[f32; 4]>,
+    attributes: Vec<VertexAttributes>, // Keep strictly for Geometry struct
     indices: Vec<u32>,
 ) -> Geometry {
     let desc = wgpu::BlasTriangleGeometrySizeDescriptor {
         vertex_format: wgpu::VertexFormat::Float32x3,
-        vertex_count: vertices.len() as u32,
+        vertex_count: positions.len() as u32,
         index_format: Some(wgpu::IndexFormat::Uint32),
         index_count: Some(indices.len() as u32),
         flags: wgpu::AccelerationStructureGeometryFlags::OPAQUE,
@@ -43,7 +44,8 @@ fn build_blas(
 
     Geometry {
         blas,
-        vertices,
+        positions,
+        attributes,
         indices,
         desc,
     }
@@ -52,36 +54,39 @@ fn build_blas(
 // --- ヘルパー関数: 平面(Quad)のBLASを作成 ---
 pub fn create_plane_blas(device: &wgpu::Device) -> Geometry {
     // 1x1 の平面 (XZ平面, 中心0,0)
-    let vertices = vec![
-        Vertex {
-            pos: [-0.5, 0.0, 0.5, 1.0],
+    let positions = vec![
+        [-0.5, 0.0, 0.5, 1.0],  // 左手前
+        [0.5, 0.0, 0.5, 1.0],   // 右手前
+        [-0.5, 0.0, -0.5, 1.0], // 左奥
+        [0.5, 0.0, -0.5, 1.0],  // 右奥
+    ];
+    let attributes = vec![
+        VertexAttributes {
             normal: [0.0, 1.0, 0.0, 0.0],
             uv: [0.0, 1.0, 0.0, 0.0],
-        }, // 左手前
-        Vertex {
-            pos: [0.5, 0.0, 0.5, 1.0],
+        },
+        VertexAttributes {
             normal: [0.0, 1.0, 0.0, 0.0],
             uv: [1.0, 1.0, 0.0, 0.0],
-        }, // 右手前
-        Vertex {
-            pos: [-0.5, 0.0, -0.5, 1.0],
+        },
+        VertexAttributes {
             normal: [0.0, 1.0, 0.0, 0.0],
             uv: [0.0, 0.0, 0.0, 0.0],
-        }, // 左奥
-        Vertex {
-            pos: [0.5, 0.0, -0.5, 1.0],
+        },
+        VertexAttributes {
             normal: [0.0, 1.0, 0.0, 0.0],
             uv: [1.0, 0.0, 0.0, 0.0],
-        }, // 右奥
+        },
     ];
     let indices: Vec<u32> = vec![0, 1, 2, 2, 1, 3]; // Triangle List
 
-    build_blas(device, "Quad BLAS", vertices, indices)
+    build_blas(device, "Quad BLAS", positions, attributes, indices)
 }
 
 // --- ヘルパー関数: 立方体(Cube)のBLASを作成 ---
 pub fn create_cube_blas(device: &wgpu::Device) -> Geometry {
-    let mut vertices = Vec::new();
+    let mut positions = Vec::new();
+    let mut attributes = Vec::new();
     let mut indices = Vec::new();
     let mut v_idx = 0;
 
@@ -132,23 +137,27 @@ pub fn create_cube_blas(device: &wgpu::Device) -> Geometry {
 
     for (normal, v0, v1, v2, v3) in sides {
         let n = [normal[0], normal[1], normal[2], 0.0];
-        vertices.push(Vertex {
-            pos: [v0[0], v0[1], v0[2], 1.0],
+
+        positions.push([v0[0], v0[1], v0[2], 1.0]);
+        attributes.push(VertexAttributes {
             normal: n,
             uv: [0.0, 1.0, 0.0, 0.0],
         });
-        vertices.push(Vertex {
-            pos: [v1[0], v1[1], v1[2], 1.0],
+
+        positions.push([v1[0], v1[1], v1[2], 1.0]);
+        attributes.push(VertexAttributes {
             normal: n,
             uv: [1.0, 1.0, 0.0, 0.0],
         });
-        vertices.push(Vertex {
-            pos: [v2[0], v2[1], v2[2], 1.0],
+
+        positions.push([v2[0], v2[1], v2[2], 1.0]);
+        attributes.push(VertexAttributes {
             normal: n,
             uv: [1.0, 0.0, 0.0, 0.0],
         });
-        vertices.push(Vertex {
-            pos: [v3[0], v3[1], v3[2], 1.0],
+
+        positions.push([v3[0], v3[1], v3[2], 1.0]);
+        attributes.push(VertexAttributes {
             normal: n,
             uv: [0.0, 0.0, 0.0, 0.0],
         });
@@ -163,12 +172,13 @@ pub fn create_cube_blas(device: &wgpu::Device) -> Geometry {
         v_idx += 4;
     }
 
-    build_blas(device, "Cube BLAS", vertices, indices)
+    build_blas(device, "Cube BLAS", positions, attributes, indices)
 }
 
 // --- ヘルパー関数: 球体(Sphere)のBLASを作成 (Icosphere) ---
 pub fn create_sphere_blas(device: &wgpu::Device, subdivisions: u32) -> Geometry {
-    let mut vertices = Vec::new();
+    let mut positions = Vec::new();
+    let mut attributes = Vec::new();
     let mut indices = Vec::new();
 
     let t = (1.0 + 5.0f32.sqrt()) / 2.0;
@@ -177,12 +187,13 @@ pub fn create_sphere_blas(device: &wgpu::Device, subdivisions: u32) -> Geometry 
         let length = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
         let n = [p[0] / length, p[1] / length, p[2] / length];
         let pos = [n[0] * 0.5, n[1] * 0.5, n[2] * 0.5, 1.0];
-        vertices.push(Vertex {
-            pos,
+
+        positions.push(pos);
+        attributes.push(VertexAttributes {
             normal: [n[0], n[1], n[2], 0.0],
             uv: [0.0, 0.0, 0.0, 0.0], // TODO: Spherical mapping
         });
-        vertices.len() as u32 - 1
+        positions.len() as u32 - 1
     };
 
     add_vertex([-1.0, t, 0.0]);
@@ -229,9 +240,9 @@ pub fn create_sphere_blas(device: &wgpu::Device, subdivisions: u32) -> Geometry 
             let v2 = tri[1];
             let v3 = tri[2];
 
-            let a = get_midpoint(v1, v2, &mut vertices, &mut midpoint_cache);
-            let b = get_midpoint(v2, v3, &mut vertices, &mut midpoint_cache);
-            let c = get_midpoint(v3, v1, &mut vertices, &mut midpoint_cache);
+            let a = get_midpoint(v1, v2, &mut positions, &mut attributes, &mut midpoint_cache);
+            let b = get_midpoint(v2, v3, &mut positions, &mut attributes, &mut midpoint_cache);
+            let c = get_midpoint(v3, v1, &mut positions, &mut attributes, &mut midpoint_cache);
 
             new_faces.push([v1, a, c]);
             new_faces.push([v2, b, a]);
@@ -245,13 +256,14 @@ pub fn create_sphere_blas(device: &wgpu::Device, subdivisions: u32) -> Geometry 
         indices.extend_from_slice(&tri);
     }
 
-    build_blas(device, "Ico Sphere BLAS", vertices, indices)
+    build_blas(device, "Ico Sphere BLAS", positions, attributes, indices)
 }
 
 fn get_midpoint(
     p1: u32,
     p2: u32,
-    vertices: &mut Vec<Vertex>,
+    positions: &mut Vec<[f32; 4]>,
+    attributes: &mut Vec<VertexAttributes>,
     cache: &mut HashMap<(u32, u32), u32>,
 ) -> u32 {
     let key = if p1 < p2 { (p1, p2) } else { (p2, p1) };
@@ -259,8 +271,8 @@ fn get_midpoint(
         return index;
     }
 
-    let v1 = vertices[p1 as usize].pos;
-    let v2 = vertices[p2 as usize].pos;
+    let v1 = positions[p1 as usize];
+    let v2 = positions[p2 as usize];
 
     let mid = [
         (v1[0] + v2[0]) * 0.5,
@@ -271,21 +283,23 @@ fn get_midpoint(
     let length = (mid[0] * mid[0] + mid[1] * mid[1] + mid[2] * mid[2]).sqrt();
     let n = [mid[0] / length, mid[1] / length, mid[2] / length];
 
-    vertices.push(Vertex {
-        pos: [n[0] * 0.5, n[1] * 0.5, n[2] * 0.5, 1.0],
+    positions.push([n[0] * 0.5, n[1] * 0.5, n[2] * 0.5, 1.0]);
+    attributes.push(VertexAttributes {
         normal: [n[0], n[1], n[2], 0.0],
         uv: [0.0, 0.0, 0.0, 0.0],
     });
 
-    let index = vertices.len() as u32 - 1;
+    let index = positions.len() as u32 - 1;
     cache.insert(key, index);
     index
 }
 
 use glam::Vec3;
+use wgpu::util::DeviceExt;
 
 pub fn create_crystal_blas(device: &wgpu::Device) -> Geometry {
-    let mut vertices = Vec::new();
+    let mut positions = Vec::new();
+    let mut attributes = Vec::new();
     let mut indices = Vec::new();
 
     // 頂点データ
@@ -310,21 +324,24 @@ pub fn create_crystal_blas(device: &wgpu::Device) -> Geometry {
         let edge2 = p2 - p0;
         let n = edge1.cross(edge2).normalize();
 
-        let base = vertices.len() as u32;
-        vertices.push(Vertex {
-            pos: [p0.x, p0.y, p0.z, 1.0],
+        let base = positions.len() as u32;
+
+        positions.push([p0.x, p0.y, p0.z, 1.0]);
+        attributes.push(VertexAttributes {
             normal: [n.x, n.y, n.z, 0.0],
-            uv: [0.0, 0.0, 0.0, 0.0],
+            uv: [0.0; 4],
         });
-        vertices.push(Vertex {
-            pos: [p1.x, p1.y, p1.z, 1.0],
+
+        positions.push([p1.x, p1.y, p1.z, 1.0]);
+        attributes.push(VertexAttributes {
             normal: [n.x, n.y, n.z, 0.0],
-            uv: [0.0, 0.0, 0.0, 0.0],
+            uv: [0.0; 4],
         });
-        vertices.push(Vertex {
-            pos: [p2.x, p2.y, p2.z, 1.0],
+
+        positions.push([p2.x, p2.y, p2.z, 1.0]);
+        attributes.push(VertexAttributes {
             normal: [n.x, n.y, n.z, 0.0],
-            uv: [0.0, 0.0, 0.0, 0.0],
+            uv: [0.0; 4],
         });
 
         indices.push(base);
@@ -351,5 +368,11 @@ pub fn create_crystal_blas(device: &wgpu::Device) -> Geometry {
         add_face(bottom_tip, bottom_ring[i], bottom_ring[(i + 1) % 4]);
     }
 
-    build_blas(device, "Refined Crystal BLAS", vertices, indices)
+    build_blas(
+        device,
+        "Refined Crystal BLAS",
+        positions,
+        attributes,
+        indices,
+    )
 }

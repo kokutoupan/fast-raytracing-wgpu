@@ -23,11 +23,11 @@ struct Material {
     tex_id: u32,
 }
 
-struct Vertex {
-    pos: vec4f,
+struct VertexAttributes {
     normal: vec4f,
     uv: vec4f
 }
+
 struct MeshInfo {
     vertex_offset: u32,
     index_offset: u32,
@@ -38,7 +38,7 @@ struct MeshInfo {
 @group(0) @binding(0) var tlas: acceleration_structure;
 @group(0) @binding(1) var<uniform> camera: Camera;
 @group(0) @binding(2) var<storage, read> materials: array<Material>;
-@group(0) @binding(3) var<storage, read> vertices: array<Vertex>;
+@group(0) @binding(3) var<storage, read> attributes: array<VertexAttributes>;
 @group(0) @binding(4) var<storage, read> indices: array<u32>;
 @group(0) @binding(5) var<storage, read> mesh_infos: array<MeshInfo>;
 
@@ -99,9 +99,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let i1 = indices[idx_offset + 1u] + mesh_info.vertex_offset;
     let i2 = indices[idx_offset + 2u] + mesh_info.vertex_offset;
 
-    let v0 = vertices[i0];
-    let v1 = vertices[i1];
-    let v2 = vertices[i2];
+    let v0 = attributes[i0];
+    let v1 = attributes[i1];
+    let v2 = attributes[i2];
 
     let u_bary = committed.barycentrics.x;
     let v_bary = committed.barycentrics.y;
@@ -144,9 +144,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let coord = vec2<i32>(id.xy);
     textureStore(out_pos, coord, vec4f(pos, f32(mat_id))); 
     // Normal.w に Roughness
-    textureStore(out_normal, coord, vec4f(ffnormal, mat.roughness));
+    textureStore(out_normal, coord, vec4f(ffnormal, 0.0));
      // Albedo.w に Metallic
-    textureStore(out_albedo, coord, vec4f(base_color, mat.metallic));
+    textureStore(out_albedo, coord, vec4f(base_color, 0.0));
     // Motion
     textureStore(out_motion, coord, vec4f(motion, 0.0, 0.0));
 }

@@ -455,6 +455,8 @@ impl Renderer {
                 self.render_height,
                 self.frame_count,
                 light_count,
+                &self.texture_view,
+                &self.sampler,
             );
 
             // 2. ReSTIR Spatial Pass

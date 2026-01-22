@@ -102,6 +102,10 @@ struct HitInfo {
 @group(0) @binding(10) var<storage, read> indices: array<u32>;
 @group(0) @binding(11) var<storage, read> mesh_infos: array<MeshInfo>;
 
+// Group 1: Textures
+@group(1) @binding(0) var tex_sampler: sampler;
+@group(1) @binding(1) var textures: texture_2d_array<f32>;
+
 // --- RNG ---
 var<private> rng_seed: u32;
 
@@ -144,9 +148,6 @@ fn fresnel_schlick(f0: vec3f, v_dot_h: f32) -> vec3f {
     return f0 + (1.0 - f0) * pow(clamp(1.0 - v_dot_h, 0.0, 1.0), 5.0);
 }
 
-// Group 1: Textures
-@group(1) @binding(0) var tex_sampler: sampler;
-@group(1) @binding(1) var textures: texture_2d_array<f32>;
 
 // --- Helper Functions ---
 fn reflectance(cosine: f32, ref_idx: f32) -> f32 {

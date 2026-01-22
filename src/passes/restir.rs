@@ -26,7 +26,8 @@ pub struct RestirPass {
     pub pipeline: wgpu::ComputePipeline,
     pub reservoir_buffers: [wgpu::Buffer; 2],
     pub bind_groups0: [wgpu::BindGroup; 2],
-    pub bind_group1: wgpu::BindGroup, // Fixed Flow
+    pub bind_group_layout1: wgpu::BindGroupLayout, // Textures
+    pub bind_group2: wgpu::BindGroup,              // Reservoirs (Group 2)
     pub scene_info_buffer: wgpu::Buffer,
 }
 
@@ -138,9 +139,62 @@ impl RestirPass {
                         },
                         count: None,
                     },
-                    // 7: Prev Pos
+                    // 7: TLAS
                     wgpu::BindGroupLayoutEntry {
                         binding: 7,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::AccelerationStructure {
+                            vertex_return: false,
+                        },
+                        count: None,
+                    },
+                    // 8: Materials
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 8,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 9: Attributes
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 9,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 10: Indices
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 10,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 11: MeshInfos
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 11,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 12: Prev Pos
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 12,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Texture {
                             sample_type: wgpu::TextureSampleType::Float { filterable: false },
@@ -149,9 +203,9 @@ impl RestirPass {
                         },
                         count: None,
                     },
-                    // 8: Prev Normal
+                    // 13: Prev Normal
                     wgpu::BindGroupLayoutEntry {
-                        binding: 8,
+                        binding: 13,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Texture {
                             sample_type: wgpu::TextureSampleType::Float { filterable: false },
@@ -163,11 +217,38 @@ impl RestirPass {
                 ],
             });
 
-        // Bind Group 1: Reservoirs
+        // Bind Group 1: Textures
         let bgl1 = ctx
             .device
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Restir BGL 1"),
+                label: Some("Restir BGL 1 (Textures)"),
+                entries: &[
+                    // 0: Sampler
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    // 1: Textures
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2Array,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
+        // Bind Group 2: Reservoirs
+        let bgl2 = ctx
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Restir BGL 2 (Reservoirs)"),
                 entries: &[
                     // 0: Prev (Read Only - though we use read_write storage in shader currently)
                     wgpu::BindGroupLayoutEntry {
@@ -198,7 +279,7 @@ impl RestirPass {
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Restir Pipeline Layout"),
-                bind_group_layouts: &[&bgl0, &bgl1],
+                bind_group_layouts: &[&bgl0, &bgl1, &bgl2],
                 immediate_size: 0,
             });
 
@@ -247,12 +328,12 @@ impl RestirPass {
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
 
-        // Bind Group 1 Fixed Flow:
+        // Bind Group 2 Fixed Flow:
         // Input: Buffer 1 (Previous Spatial Result)
         // Output: Buffer 0 (Current Temporal Result)
-        let bind_group1 = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Restir BG1 (Fixed Flow)"),
-            layout: &bgl1,
+        let bind_group2 = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Restir BG2 (Fixed Flow)"),
+            layout: &bgl2,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -305,10 +386,32 @@ impl RestirPass {
                     },
                     wgpu::BindGroupEntry {
                         binding: 7,
-                        resource: wgpu::BindingResource::TextureView(prev_pos),
+                        resource: wgpu::BindingResource::AccelerationStructure(
+                            &scene_resources.tlas,
+                        ),
                     },
                     wgpu::BindGroupEntry {
                         binding: 8,
+                        resource: scene_resources.material_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 9,
+                        resource: scene_resources.global_attribute_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 10,
+                        resource: scene_resources.global_index_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 11,
+                        resource: scene_resources.mesh_info_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 12,
+                        resource: wgpu::BindingResource::TextureView(prev_pos),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 13,
                         resource: wgpu::BindingResource::TextureView(prev_normal),
                     },
                 ],
@@ -339,7 +442,8 @@ impl RestirPass {
             pipeline,
             reservoir_buffers,
             bind_groups0: [bg0_0, bg0_1],
-            bind_group1,
+            bind_group_layout1: bgl1,
+            bind_group2,
             scene_info_buffer,
         }
     }
@@ -352,6 +456,8 @@ impl RestirPass {
         height: u32,
         frame_count: u32,
         light_count: u32,
+        texture_view: &wgpu::TextureView,
+        sampler: &wgpu::Sampler,
     ) {
         // Update Scene Info
         ctx.queue.write_buffer(
@@ -365,6 +471,21 @@ impl RestirPass {
             }]),
         );
 
+        let bind_group1 = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Restir Texture BG"),
+            layout: &self.bind_group_layout1,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(texture_view),
+                },
+            ],
+        });
+
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Restir Pass"),
             timestamp_writes: None,
@@ -375,7 +496,8 @@ impl RestirPass {
         let idx = (frame_count % 2) as usize;
 
         cpass.set_bind_group(0, &self.bind_groups0[idx], &[]);
-        cpass.set_bind_group(1, &self.bind_group1, &[]);
+        cpass.set_bind_group(1, &bind_group1, &[]);
+        cpass.set_bind_group(2, &self.bind_group2, &[]);
 
         cpass.dispatch_workgroups((width + 7) / 8, (height + 7) / 8, 1);
     }

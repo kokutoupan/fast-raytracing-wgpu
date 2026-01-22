@@ -1,8 +1,21 @@
+enable wgpu_ray_query;
 
 // --- Constants & Structs ---
 const PI = 3.14159265359;
 const MAX_RESERVOIR_M_CANDIDATES = 32u;
 const MAX_RESERVOIR_M_TEMPORAL = 20u;
+
+struct Material {
+    base_color: vec4f,
+    light_index: i32,
+    _p0: u32,
+    _p1: u32,
+    _p2: u32,
+    roughness: f32,
+    metallic: f32,
+    ior: f32,
+    tex_id: u32,
+}
 
 struct Reservoir {
     y: u32,       // Light Index
@@ -38,6 +51,17 @@ struct Camera {
     num_lights: u32,
 }
 
+struct VertexAttributes {
+    normal: vec2f,
+    uv: vec2f,
+}
+
+struct MeshInfo {
+    vertex_offset: u32,
+    index_offset: u32,
+    pad: vec2u,
+}
+
 // --- Bindings ---
 
 // Group 0: G-Buffer & Scene context (Lights, Camera)
@@ -50,13 +74,23 @@ struct Camera {
 @group(0) @binding(5) var<storage, read> lights: array<Light>;
 @group(0) @binding(6) var<uniform> scene_info: vec4u; // x=light_count, y=frame_count
 
-// Prev G-Buffer for validation
-@group(0) @binding(7) var prev_gbuffer_pos: texture_2d<f32>;
-@group(0) @binding(8) var prev_gbuffer_normal: texture_2d<f32>;
+@group(0) @binding(7) var tlas: acceleration_structure;
+@group(0) @binding(8) var<storage, read> materials: array<Material>;
+@group(0) @binding(9) var<storage, read> attributes: array<VertexAttributes>;
+@group(0) @binding(10) var<storage, read> indices: array<u32>;
+@group(0) @binding(11) var<storage, read> mesh_infos: array<MeshInfo>;
 
-// Group 1: Reservoirs
-@group(1) @binding(0) var<storage, read_write> prev_reservoirs: array<Reservoir>;
-@group(1) @binding(1) var<storage, read_write> curr_reservoirs: array<Reservoir>;
+// Prev G-Buffer for validation
+@group(0) @binding(12) var prev_gbuffer_pos: texture_2d<f32>;
+@group(0) @binding(13) var prev_gbuffer_normal: texture_2d<f32>;
+
+// Group 1: Textures
+@group(1) @binding(0) var tex_sampler: sampler;
+@group(1) @binding(1) var textures: texture_2d_array<f32>;
+
+// Group 2: Reservoirs
+@group(2) @binding(0) var<storage, read_write> prev_reservoirs: array<Reservoir>;
+@group(2) @binding(1) var<storage, read_write> curr_reservoirs: array<Reservoir>;
 
 // --- Utilities ---
 // PCG Hash for better quality random numbers

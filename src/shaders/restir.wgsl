@@ -641,7 +641,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     r.w_sum = 0.0;
     r.M = 0u;
     r.W = 0.0;
-    r.y = seed_candidate;
+    r.y = 0u;
 
     // =========================================================
     // Phase 1: Initial Candidate Generation (1本生成)
@@ -696,8 +696,6 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
             var prev_r = prev_reservoirs[prev_pixel_idx];
             
             // ★重要: Replay (再評価) ★
-            // 過去のReservoirが持っているパス(seed)を、今のピクセル位置で再生する。
-            // これにより「過去のパスが、今の位置でどれくらい明るいか」を正確に評価する。
             let prev_replay_radiance = trace_path(coord, prev_r.y);
             let p_hat_prev = luminance(prev_replay_radiance);
 

@@ -468,6 +468,8 @@ impl Renderer {
                 self.render_height,
                 self.frame_count,
                 light_count,
+                &self.texture_view,
+                &self.sampler,
             );
 
             // Determine which reservoir buffer is the *output* of the current frame

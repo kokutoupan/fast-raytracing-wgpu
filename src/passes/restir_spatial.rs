@@ -22,18 +22,6 @@ impl Reservoir {
     }
 }
 
-pub struct RestirSpatialPass {
-    pub pipeline: wgpu::ComputePipeline,
-    // No need to own buffers, just views or nothing?
-    // Wait, we need to bind them.
-    // The Renderer owns the buffers. But the pass needs BindGroups.
-    // Let's assume we pass buffers in new() and create bindgroups.
-    pub bind_groups0: [wgpu::BindGroup; 2], // G-Buffer Ping-Pong (Same as Temporal)
-    pub bind_group1: wgpu::BindGroup,       // Fixed Reservoir Flow (Temporal -> Spatial)
-
-    pub scene_info_buffer: wgpu::Buffer,
-}
-
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct SceneInfo {
@@ -41,6 +29,14 @@ struct SceneInfo {
     frame_count: u32,
     pad1: u32,
     pad2: u32,
+}
+
+pub struct RestirSpatialPass {
+    pub pipeline: wgpu::ComputePipeline,
+    pub bind_groups0: [wgpu::BindGroup; 2],
+    pub bind_group_layout1: wgpu::BindGroupLayout, // Textures
+    pub bind_group2: wgpu::BindGroup,              // Reservoirs (Group 2)
+    pub scene_info_buffer: wgpu::Buffer,
 }
 
 impl RestirSpatialPass {
@@ -52,7 +48,6 @@ impl RestirSpatialPass {
         gbuffer_normal: &[wgpu::TextureView; 2],
         gbuffer_albedo: &wgpu::TextureView,
         gbuffer_motion: &wgpu::TextureView,
-        // Buffers passed from Renderer
         reservoirs_temporal: &wgpu::Buffer, // Read (Input)
         reservoirs_spatial: &wgpu::Buffer,  // Write (Output)
         render_width: u32,
@@ -62,7 +57,7 @@ impl RestirSpatialPass {
             .device
             .create_shader_module(wgpu::include_wgsl!("../shaders/restir_spatial.wgsl"));
 
-        // Bind Group 0: GBuffer, Camera, Lights, Scene Info
+        // Bind Group 0: GBuffer, Camera, Lights, Scene Info, Geometry, Prev GBuffer
         let bgl0 = ctx
             .device
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -145,9 +140,62 @@ impl RestirSpatialPass {
                         },
                         count: None,
                     },
-                    // 7: Prev Pos
+                    // 7: TLAS
                     wgpu::BindGroupLayoutEntry {
                         binding: 7,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::AccelerationStructure {
+                            vertex_return: false,
+                        },
+                        count: None,
+                    },
+                    // 8: Materials
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 8,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 9: Attributes
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 9,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 10: Indices
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 10,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 11: MeshInfos
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 11,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 12: Prev Pos
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 12,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Texture {
                             sample_type: wgpu::TextureSampleType::Float { filterable: false },
@@ -156,9 +204,9 @@ impl RestirSpatialPass {
                         },
                         count: None,
                     },
-                    // 8: Prev Normal
+                    // 13: Prev Normal
                     wgpu::BindGroupLayoutEntry {
-                        binding: 8,
+                        binding: 13,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Texture {
                             sample_type: wgpu::TextureSampleType::Float { filterable: false },
@@ -170,18 +218,45 @@ impl RestirSpatialPass {
                 ],
             });
 
-        // Bind Group 1: Reservoirs (Input -> Output)
+        // Bind Group 1: Textures
         let bgl1 = ctx
             .device
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Restir Spatial BGL 1"),
+                label: Some("Restir Spatial BGL 1 (Textures)"),
                 entries: &[
-                    // 0: Input (Temporal Result) - ReadOnly? No, standard storage for now.
+                    // 0: Sampler
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    // 1: Textures
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2Array,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
+        // Bind Group 2: Reservoirs (Input -> Output)
+        let bgl2 = ctx
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Restir Spatial BGL 2"),
+                entries: &[
+                    // 0: Input (Temporal Result)
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true }, // Using read_write for simplicity or maybe readonly
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
@@ -205,7 +280,7 @@ impl RestirSpatialPass {
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Restir Spatial Pipeline Layout"),
-                bind_group_layouts: &[&bgl0, &bgl1],
+                bind_group_layouts: &[&bgl0, &bgl1, &bgl2],
                 immediate_size: 0,
             });
 
@@ -232,11 +307,10 @@ impl RestirSpatialPass {
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
 
-        // Bind Group 1: Fixed Flow (Buf0 -> Buf1)
-        // Note: We need to guarantee that Temporal phase writes to Buf0.
-        let bind_group1 = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Restir Spatial BG1"),
-            layout: &bgl1,
+        // Bind Group 2: Fixed Flow (Buf0 -> Buf1)
+        let bind_group2 = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Restir Spatial BG2"),
+            layout: &bgl2,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -289,10 +363,32 @@ impl RestirSpatialPass {
                     },
                     wgpu::BindGroupEntry {
                         binding: 7,
-                        resource: wgpu::BindingResource::TextureView(prev_pos),
+                        resource: wgpu::BindingResource::AccelerationStructure(
+                            &scene_resources.tlas,
+                        ),
                     },
                     wgpu::BindGroupEntry {
                         binding: 8,
+                        resource: scene_resources.material_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 9,
+                        resource: scene_resources.global_attribute_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 10,
+                        resource: scene_resources.global_index_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 11,
+                        resource: scene_resources.mesh_info_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 12,
+                        resource: wgpu::BindingResource::TextureView(prev_pos),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 13,
                         resource: wgpu::BindingResource::TextureView(prev_normal),
                     },
                 ],
@@ -322,7 +418,8 @@ impl RestirSpatialPass {
         Self {
             pipeline,
             bind_groups0: [bg0_0, bg0_1],
-            bind_group1,
+            bind_group_layout1: bgl1,
+            bind_group2,
             scene_info_buffer,
         }
     }
@@ -335,6 +432,8 @@ impl RestirSpatialPass {
         height: u32,
         frame_count: u32,
         light_count: u32,
+        texture_view: &wgpu::TextureView,
+        sampler: &wgpu::Sampler,
     ) {
         // Update Scene Info
         ctx.queue.write_buffer(
@@ -348,6 +447,21 @@ impl RestirSpatialPass {
             }]),
         );
 
+        let bind_group1 = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Restir Spatial Texture BG"),
+            layout: &self.bind_group_layout1,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(texture_view),
+                },
+            ],
+        });
+
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Restir Spatial Pass"),
             timestamp_writes: None,
@@ -358,7 +472,8 @@ impl RestirSpatialPass {
         let idx = (frame_count % 2) as usize;
 
         cpass.set_bind_group(0, &self.bind_groups0[idx], &[]);
-        cpass.set_bind_group(1, &self.bind_group1, &[]);
+        cpass.set_bind_group(1, &bind_group1, &[]);
+        cpass.set_bind_group(2, &self.bind_group2, &[]);
 
         cpass.dispatch_workgroups((width + 7) / 8, (height + 7) / 8, 1);
     }

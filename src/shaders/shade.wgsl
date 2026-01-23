@@ -447,15 +447,19 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> vec3f {
 
     let is_specular = (mat.metallic > 0.01) || (mat.ior > 1.01 || mat.ior < 0.99);
     if !is_specular {
-        let r = reservoirs[pixel_idx];
-        if r.W > 0.0 {
-            let light_idx = r.y;
-            let light = lights[light_idx];
-            let ls = sample_light(light_idx);
-            
-            // Weight for ReSTIR NEE is W * (1/pdf)
-            let weight = r.W * (1.0 / ls.pdf);
-            accumulated_color += eval_direct_lighting(hit, wo, mat, base_color, ls, weight) * throughput;
+        if camera.num_lights > 0u {
+            let light_idx = u32(rand() * f32(camera.num_lights));
+            if light_idx < camera.num_lights {
+                let ls = sample_light(light_idx);
+
+                let pdf_nee = ls.pdf * (1.0 / f32(camera.num_lights));
+                let p_bsdf = eval_pdf(hit.ffnormal, normalize(ls.pos - hit.pos), wo, mat);
+                let mis_weight_nee = pdf_nee / (pdf_nee + p_bsdf);
+
+                let weight = mis_weight_nee / pdf_nee;
+
+                accumulated_color += eval_direct_lighting(hit, wo, mat, base_color, ls, weight) * throughput;
+            }
         }
         previous_was_diffuse = true;
     } else {
@@ -583,8 +587,11 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let coord = vec2<i32>(id.xy);
     
     // Seed RNG
-    let seed_base = id.x + id.y * size.x + camera.frame_count * 927163u;
-    let seed = pcg_hash(seed_base);
+    // let seed_base = id.x + id.y * size.x + camera.frame_count * 927163u;
+    // let seed = pcg_hash(seed_base);
+
+    let reservoir = reservoirs[id.y * size.x + id.x];
+    let seed = reservoir.y;
 
     let color = trace_path(coord, seed);
 

@@ -135,6 +135,8 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     if id.x >= size.x || id.y >= size.y { return; }
 
     let pixel_idx = id.y * size.x + id.x;
+
+
     // Initialize seed with PCG hash of coordinates and frame
     // Mixing x, y, and frame to avoid correlations
     let seed_init = id.y * size.x + id.x + scene_info.y * 0x9e3779b9u;
@@ -226,4 +228,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     }
 
     out_reservoirs[pixel_idx] = spatial_r;
+
+
+    // デバッグ用
+    let r = in_reservoirs[pixel_idx];
+    out_reservoirs[pixel_idx] = r;
 }

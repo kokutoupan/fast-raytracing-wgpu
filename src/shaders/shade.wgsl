@@ -593,7 +593,8 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let reservoir = reservoirs[id.y * size.x + id.x];
     let seed = reservoir.y;
 
-    let color = trace_path(coord, seed);
+    var color = trace_path(coord, seed);
+    color = color * reservoir.W;
 
     textureStore(out_color, coord, vec4f(color, 1.0));
 }

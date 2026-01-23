@@ -79,6 +79,13 @@ struct HitInfo {
     t: f32,
 }
 
+struct PathResult {
+    radiance: vec3f,
+    v1_pos: vec3f,
+    v1_normal: vec3f,
+    valid_v1: bool,
+}
+
 // --- Bindings ---
 
 // Group 0: G-Buffer & Scene context (Lights, Camera)
@@ -129,6 +136,13 @@ fn random_unit_vector() -> vec3f {
     let x = r * cos(a);
     let y = r * sin(a);
     return vec3f(x, y, z);
+}
+
+fn rand_lcg(state: ptr<function, u32>) -> f32 {
+    let old = *state;
+    *state = old * 747796405u + 2891336453u;
+    let word = ((*state >> ((*state >> 28u) + 4u)) ^ *state) * 277803737u;
+    return f32((word >> 22u) ^ word) / 4294967295.0;
 }
 
 fn decode_octahedral_normal(e: vec2f) -> vec3f {
@@ -390,8 +404,14 @@ fn eval_direct_lighting(hit: HitInfo, wo: vec3f, mat: Material, base_color: vec3
     return vec3f(0.0);
 }
 
-fn trace_path(coord: vec2<i32>, seed: u32) -> vec3f {
+fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
     rng_seed = seed;
+
+    var result: PathResult;
+    result.radiance = vec3f(0.0);
+    result.valid_v1 = false;
+    result.v1_pos = vec3f(0.0);
+    result.v1_normal = vec3f(0.0);
 
     let size = textureDimensions(gbuffer_pos);
     let pixel_idx = u32(coord.y) * size.x + u32(coord.x);
@@ -401,7 +421,7 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> vec3f {
     // -------------------------------------------------------------------------
     let pos_w = textureLoad(gbuffer_pos, coord, 0);
     if pos_w.w < 0.0 {
-        return vec3f(0.0); // Background
+        return result; // Background
     }
     let normal_w = textureLoad(gbuffer_normal, coord, 0);
     let albedo_raw = textureLoad(gbuffer_albedo, coord, 0);
@@ -443,7 +463,8 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> vec3f {
     if mat.light_index >= 0 {
         let light = lights[mat.light_index];
         accumulated_color += light.emission.rgb * light.emission.a;
-        return accumulated_color;
+        result.radiance = accumulated_color;
+        return result;
     }
 
     let is_specular = (mat.metallic > 0.01) || (mat.ior > 1.01 || mat.ior < 0.99);
@@ -469,7 +490,8 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> vec3f {
 
     let sc = sample_bsdf(wo, hit, mat, base_color);
     if sc.weight.x <= 0.0 && sc.weight.y <= 0.0 && sc.weight.z <= 0.0 {
-        return accumulated_color;
+        result.radiance = accumulated_color;
+        return result;
     }
     last_bsdf_pdf = sc.pdf;
     throughput *= sc.weight;
@@ -513,6 +535,12 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> vec3f {
             origin,
             next_dir
         );
+        // ★Shift Mapping用: 第1バウンスの情報を記録
+        if depth == 1u {
+            result.valid_v1 = true;
+            result.v1_pos = hit.pos;
+            result.v1_normal = hit.normal;
+        }
 
         // Update View Dir
         wo = -next_dir;
@@ -575,7 +603,8 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> vec3f {
         next_dir = sc_bounce.wi;
     }
 
-    return accumulated_color;
+    result.radiance = accumulated_color;
+    return result;
 }
 
 // --- ReSTIR Helpers ---
@@ -584,9 +613,9 @@ fn luminance(c: vec3f) -> f32 {
     return dot(c, vec3f(0.2126, 0.7152, 0.0722));
 }
 
-fn update_reservoir(r: ptr<function, Reservoir>, seed_cand: u32, w: f32, rnd: f32) -> bool {
+fn update_reservoir(r: ptr<function, Reservoir>, seed_cand: u32, w: f32, rnd: f32, cnt: u32) -> bool {
     (*r).w_sum += w;
-    (*r).M += 1u;
+    (*r).M += cnt;
     if rnd * (*r).w_sum < w {
         (*r).y = seed_cand;
         return true;
@@ -615,6 +644,8 @@ fn is_valid_neighbor(
     return true;
 }
 
+
+
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) id: vec3u) {
     let size = textureDimensions(gbuffer_pos);
@@ -626,6 +657,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     // RNG Seed
     let seed_init = id.y * size.x + id.x + scene_info.y * 0x12345678u;
     let seed = pcg_hash(seed_init);
+    
+    // Independent RNG state for spatial loop logic
+    var local_seed = seed_init;
 
     // G-Buffer
     let pos_w = textureLoad(gbuffer_pos, coord, 0);
@@ -637,7 +671,6 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         return;
     }
 
-    let pos = pos_w.xyz;
     let normal_w = textureLoad(gbuffer_normal, coord, 0);
     let normal = decode_octahedral_normal(normal_w.xy);
     let mat_id = u32(pos_w.w + 0.1);
@@ -651,8 +684,8 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
     for (var i = 0u; i < num_neighbors; i++) {
         // ランダムな近傍ピクセルを選ぶ
-        let r1 = rand();
-        let r2 = rand();
+        let r1 = rand_lcg(&local_seed);
+        let r2 = rand_lcg(&local_seed);
         
         // 円盤サンプリング
         let angle = 2.0 * PI * r1;
@@ -673,30 +706,29 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         let n_normal = decode_octahedral_normal(n_normal_w.xy);
         let n_mat_id = u32(n_pos_w.w + 0.1);
 
-        // is_valid_neighbor は restir.wgsl と同じものを使う
-        // (ただし、ここでは現在フレーム同士の比較なので camera_pos は不要かもしれないが、流用でOK)
-        if is_valid_neighbor(pos, normal, mat_id, n_pos_w.xyz, n_normal, n_mat_id, camera.view_pos.xyz) {
+        if n_pos_w.w < 0.0 || mat_id != n_mat_id || dot(normal, n_normal) < 0.9 { continue; }
 
-            var neighbor_r = in_reservoirs[neighbor_idx];
+        var neighbor_r = in_reservoirs[neighbor_idx];
             
-            // ★重要: Replay (Spatial)
-            // 隣のピクセルが持っているパス(seed)を、自分の位置で再生
-            let replay_radiance = trace_path(coord, neighbor_r.y);
-            let p_hat = luminance(replay_radiance);
+        // --- Shift Mapping Logic (Primary Sample Space) ---
+        
+        // Use neighbor's seed at CURRENT coordinate
+        let c_res = trace_path(coord, neighbor_r.y);
 
-            if p_hat > 0.0 {
-                neighbor_r.M = min(neighbor_r.M, 20u); // Clamp M
-                let w_neighbor = p_hat * neighbor_r.W * f32(neighbor_r.M);
+        // Contribution at current pixel
+        let p_hat_c = luminance(c_res.radiance); 
+        
+        // Merge
+        neighbor_r.M = min(neighbor_r.M, 20u);
+        let w_neighbor = p_hat_c * neighbor_r.W * f32(neighbor_r.M);
 
-                update_reservoir(&r, neighbor_r.y, w_neighbor, rand());
-                r.M += neighbor_r.M;
-            }
-        }
+        // Accumulate exactly neighbor_r.M samples
+        update_reservoir(&r, neighbor_r.y, w_neighbor, rand_lcg(&local_seed), neighbor_r.M);
     }
 
     // Finalize W
-    let final_radiance = trace_path(coord, r.y);
-    let p_hat_final = luminance(final_radiance);
+    let final_res = trace_path(coord, r.y);
+    let p_hat_final = luminance(final_res.radiance);
 
     if p_hat_final > 0.0 {
         r.W = (1.0 / p_hat_final) * (r.w_sum / f32(r.M));

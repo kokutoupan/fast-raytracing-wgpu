@@ -584,9 +584,9 @@ fn luminance(c: vec3f) -> f32 {
     return dot(c, vec3f(0.2126, 0.7152, 0.0722));
 }
 
-fn update_reservoir(r: ptr<function, Reservoir>, seed_cand: u32, w: f32, rnd: f32) -> bool {
+fn update_reservoir(r: ptr<function, Reservoir>, seed_cand: u32, w: f32, rnd: f32, cnt: u32) -> bool {
     (*r).w_sum += w;
-    (*r).M += 1u;
+    (*r).M += cnt;
     if rnd * (*r).w_sum < w {
         (*r).y = seed_cand;
         return true;
@@ -615,6 +615,14 @@ fn is_valid_neighbor(
     return true;
 }
 
+// --- RNG Helper ---
+fn rand_lcg(state: ptr<function, u32>) -> f32 {
+    let old = *state;
+    *state = old * 747796405u + 2891336453u;
+    let word = ((*state >> ((*state >> 28u) + 4u)) ^ *state) * 277803737u;
+    return f32((word >> 22u) ^ word) / 4294967295.0;
+}
+
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) id: vec3u) {
     let size = textureDimensions(gbuffer_pos);
@@ -626,6 +634,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     // Seed RNG
     let seed_base = pixel_idx + camera.frame_count * 927163u;
     let seed_candidate = pcg_hash(seed_base);
+    
+    // Independent RNG for logic
+    var local_seed = seed_base;
 
     // G-Buffer 読み込み
     let pos_w = textureLoad(gbuffer_pos, coord, 0);
@@ -654,7 +665,8 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     // Reservoirに登録 (RIS)
     // ここでは候補が1つだけなので、必ず採用される (rnd=0.5)
     // weight w = p_hat / source_pdf (source_pdf = 1.0 とみなす)
-    update_reservoir(&r, seed_candidate, p_hat, 0.5);
+    // M accumulation: 1 sample
+    update_reservoir(&r, seed_candidate, p_hat, 0.5, 1u);
 
     // 初期Wの計算
     if p_hat > 0.0 {
@@ -702,14 +714,16 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
             // 明るさが0でない有効なパスならマージ
             if p_hat_prev > 0.0 {
                 // 履歴の長さを制限 (ゴースト低減)
-                prev_r.M = min(prev_r.M, MAX_RESERVOIR_M_TEMPORAL);
+                // Note: We clamp prev_r.M locally before merging
+                let clamped_M = min(prev_r.M, MAX_RESERVOIR_M_TEMPORAL);
 
                 // RIS Weight計算: p_hat * W * M
-                let w_prev = p_hat_prev * prev_r.W * f32(prev_r.M);
+                // We use M of the neighbor (clamped)
+                let w_prev = p_hat_prev * prev_r.W * f32(clamped_M);
 
-                // マージ実行
-                update_reservoir(&r, prev_r.y, w_prev, rand());
-                r.M += prev_r.M;
+                // マージ実行 (Accumulate neighbor M)
+                // update_reservoir will add 'clamped_M' to current M.
+                update_reservoir(&r, prev_r.y, w_prev, rand_lcg(&local_seed), clamped_M);
             }
         }
     }
@@ -730,9 +744,6 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     } else {
         r.W = 0.0;
     }
-
-
-    r.y = seed_candidate;
 
     curr_reservoirs[pixel_idx] = r;
 }

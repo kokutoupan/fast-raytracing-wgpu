@@ -110,6 +110,7 @@ struct PathResult {
 
 @group(0) @binding(12) var prev_gbuffer_pos: texture_2d<f32>;
 @group(0) @binding(13) var prev_gbuffer_normal: texture_2d<f32>;
+@group(0) @binding(14) var out_tex: texture_storage_2d<rgba32float, write>;
 
 // Group 1: Textures
 @group(1) @binding(0) var tex_sampler: sampler;
@@ -676,6 +677,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         r_out.p_hat = 0.0;
         r_out.pad0 = 0.0; r_out.pad1 = 0.0; r_out.pad2 = 0.0;
         out_reservoirs[pixel_idx] = r_out;
+        textureStore(out_tex, coord, vec4f(0.0)); // <--- Fix ghosting
         return;
     }
 
@@ -688,7 +690,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
     // Spatial Loop (例えば 3~5近傍)
     let num_neighbors = 3u;
-    let radius = 20.0; // ピクセル半径 (ノイズの状況に合わせて調整)
+    let radius = 10.0; // ピクセル半径 (ノイズの状況に合わせて調整)
 
     for (var i = 0u; i < num_neighbors; i++) {
         // ランダムな近傍ピクセルを選ぶ
@@ -737,13 +739,20 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     // Finalize W using cached p_hat
     let p_hat_final = r.p_hat;
 
+    var final_color = vec3f(0.0);
+
     if p_hat_final > 0.0 {
         r.W = (1.0 / p_hat_final) * (r.w_sum / f32(r.M));
-        // r.p_hat is already set
+        
+        // Final Shading (Output to Texture)
+        let final_res = trace_path(coord, r.y);
+        final_color = final_res.radiance * r.W;
+        r.p_hat = luminance(final_color);
     } else {
         r.W = 0.0;
         r.p_hat = 0.0;
     }
 
     out_reservoirs[pixel_idx] = r;
+    textureStore(out_tex, vec2i(coord), vec4f(final_color, 1.0));
 }

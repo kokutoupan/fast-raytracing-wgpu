@@ -169,7 +169,7 @@ pub struct Renderer {
     gbuffer_pass: GBufferPass,
     restir_pass: RestirPass,
     restir_spatial_pass: RestirSpatialPass,
-    shade_pass: ShadePass,
+    // shade_pass: ShadePass, // Removed
     post_pass: PostPass,
     blit_pass: BlitPass,
 
@@ -337,6 +337,7 @@ impl Renderer {
             &targets.gbuffer_motion_view,
             &restir_pass.reservoir_buffers[0], // Input (Temporal Result)
             &restir_pass.reservoir_buffers[1], // Output (Spatial Result)
+            &targets.raw_view,                 // Output (Color)
             render_width,
             render_height,
         );
@@ -349,8 +350,6 @@ impl Renderer {
             &post_params_buffer,
         );
 
-        let shade_pass = ShadePass::new(ctx);
-
         let blit_pass = BlitPass::new(ctx, &targets.pp_view, &sampler, &blit_params_buffer);
 
         Self {
@@ -361,7 +360,7 @@ impl Renderer {
             gbuffer_pass,
             restir_pass,
             restir_spatial_pass,
-            shade_pass,
+            // shade_pass: ShadePass::new(ctx), // Removed
             post_pass,
             blit_pass,
             targets,
@@ -459,8 +458,8 @@ impl Renderer {
                 &self.sampler,
             );
 
-            // 2. ReSTIR Spatial Pass
-            // Reads from Buffers[0] (Temporal Result), Writes to Buffers[1] (Spatial Final Result)
+            // 2. ReSTIR Spatial Pass (AND Shading)
+            // Reads from Buffers[0] (Temporal Result), Writes to Buffers[1] (Spatial Final Result) + Output Texture
             self.restir_spatial_pass.execute(
                 &mut encoder,
                 ctx,
@@ -472,38 +471,8 @@ impl Renderer {
                 &self.sampler,
             );
 
-            // Determine which reservoir buffer is the *output* of the current frame
-            // The logic is now fixed:
-            // Temporal -> Writes to 0
-            // Spatial -> Writes to 1
-            // Shade -> Reads from 1
-            let current_reservoir_buffer = &self.restir_pass.reservoir_buffers[1];
-
-            // 3. Shade Pass (Use GBuffer + Reservoirs)
-            self.shade_pass.execute(
-                &mut encoder,
-                ctx,
-                self.render_width,
-                self.render_height,
-                self.frame_count,
-                &self.targets.gbuffer_pos_view,
-                &self.targets.gbuffer_normal_view,
-                &self.targets.gbuffer_albedo_view,
-                &self.targets.raw_view, // Using raw_view as output for now (Shade pass writes here)
-                camera_buffer,
-                light_buffer,
-                current_reservoir_buffer,
-                tlas,
-                material_buffer,
-                attribute_buffer,
-                index_buffer,
-                mesh_info_buffer,
-                &self.texture_view,
-                &self.sampler,
-            );
-
             // 3. Post Pass (Tonemap + Accumulate?)
-            // ShadePass writes to raw_view.
+            // RestirSpatialPass writes to raw_view.
             // PostPass reads raw_view, writes to pp_view.
             self.post_pass
                 .execute(&mut encoder, self.render_width, self.render_height);

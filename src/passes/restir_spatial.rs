@@ -52,8 +52,9 @@ impl RestirSpatialPass {
         gbuffer_normal: &[wgpu::TextureView; 2],
         gbuffer_albedo: &wgpu::TextureView,
         gbuffer_motion: &wgpu::TextureView,
-        reservoirs_temporal: &wgpu::Buffer, // Read (Input)
-        reservoirs_spatial: &wgpu::Buffer,  // Write (Output)
+        reservoirs_temporal: &wgpu::Buffer,      // Read (Input)
+        reservoirs_spatial: &wgpu::Buffer,       // Write (Output)
+        output_texture_view: &wgpu::TextureView, // Write (Color Output)
         render_width: u32,
         render_height: u32,
     ) -> Self {
@@ -216,6 +217,17 @@ impl RestirSpatialPass {
                             sample_type: wgpu::TextureSampleType::Float { filterable: false },
                             view_dimension: wgpu::TextureViewDimension::D2,
                             multisampled: false,
+                        },
+                        count: None,
+                    },
+                    // 14: Output Texture
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 14,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: wgpu::TextureFormat::Rgba32Float,
+                            view_dimension: wgpu::TextureViewDimension::D2,
                         },
                         count: None,
                     },
@@ -394,6 +406,10 @@ impl RestirSpatialPass {
                     wgpu::BindGroupEntry {
                         binding: 13,
                         resource: wgpu::BindingResource::TextureView(prev_normal),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 14,
+                        resource: wgpu::BindingResource::TextureView(output_texture_view),
                     },
                 ],
             })

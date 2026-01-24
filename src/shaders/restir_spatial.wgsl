@@ -688,6 +688,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     // 自分のReservoirを読み込む
     var r = in_reservoirs[pixel_idx];
 
+
+    let camera_pos = camera.view_pos.xyz;
+
     // Spatial Loop (例えば 3~5近傍)
     let num_neighbors = 3u;
     let radius = 10.0; // ピクセル半径 (ノイズの状況に合わせて調整)
@@ -716,43 +719,39 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         let n_normal = decode_octahedral_normal(n_normal_w.xy);
         let n_mat_id = u32(n_pos_w.w + 0.1);
 
-        if n_pos_w.w < 0.0 || mat_id != n_mat_id || dot(normal, n_normal) < 0.9 { continue; }
+        if !is_valid_neighbor(pos_w.xyz, normal, mat_id, n_pos_w.xyz, n_normal, n_mat_id, camera_pos) { continue; }
 
         var neighbor_r = in_reservoirs[neighbor_idx];
             
         // --- Shift Mapping Logic (Primary Sample Space) ---
         
-        // Use neighbor's seed at CURRENT coordinate
-        let c_res = trace_path(coord, neighbor_r.y);
-
-        // Contribution at current pixel
-        let p_hat_c = luminance(c_res.radiance); 
         
-        // Merge
-        neighbor_r.M = min(neighbor_r.M, 20u);
-        let w_neighbor = p_hat_c * neighbor_r.W * f32(neighbor_r.M);
+        // 履歴長(M)の制限 (ゴースト低減)
+        let M_new = min(neighbor_r.M, 20u);
 
-        // Accumulate exactly neighbor_r.M samples
-        update_reservoir(&r, neighbor_r.y, w_neighbor, rand_lcg(&local_seed), neighbor_r.M, p_hat_c);
+        // RIS Weight = p_hat * W * M
+        // neighbor_r.W は既に正規化されているので、以下の計算で「寄与分」が出ます。
+        let weight = neighbor_r.p_hat * neighbor_r.W * f32(M_new);
+        update_reservoir(&r, neighbor_r.y, weight, rand_lcg(&local_seed), M_new, neighbor_r.p_hat);
     }
 
-    // Finalize W using cached p_hat
-    let p_hat_final = r.p_hat;
-
+    // Finalize
+    let final_res = trace_path(coord, r.y);
     var final_color = vec3f(0.0);
+    let p_hat_final = luminance(final_res.radiance); // 生の輝度
 
     if p_hat_final > 0.0 {
+        // Unbiased Weight Calculation
         r.W = (1.0 / p_hat_final) * (r.w_sum / f32(r.M));
-        
-        // Final Shading (Output to Texture)
-        let final_res = trace_path(coord, r.y);
+
         final_color = final_res.radiance * r.W;
-        r.p_hat = luminance(final_color);
+
+        r.p_hat = p_hat_final;
     } else {
         r.W = 0.0;
         r.p_hat = 0.0;
     }
 
     out_reservoirs[pixel_idx] = r;
-    textureStore(out_tex, vec2i(coord), vec4f(final_color, 1.0));
+    textureStore(out_tex, coord, vec4f(final_color, 1.0));
 }

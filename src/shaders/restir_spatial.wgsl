@@ -765,9 +765,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
     let mat = materials[mat_id];
     if mat.roughness < 0.1 || mat.metallic > 0.9 || mat.ior > 1.01 || mat.ior < 0.99 {
-        num_neighbors = 2u;
+        num_neighbors = 0u;
         // num_neighbors = 2u;
-        radius = 1.0; // かなりの近傍のみ探索する
+        radius = 2.0; // かなりの近傍のみ探索する
     }
 
     for (var i = 0u; i < num_neighbors; i++) {
@@ -814,9 +814,11 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         let mat = materials[mat_id];
         let is_specular = mat.roughness < 0.1 || mat.metallic > 0.9 || (mat.ior > 1.01 || mat.ior < 0.99);
 
-        // 対策: Jacobianが極端に小さい/大きい場合は、接続が物理的に破綻しているとみなして捨てる
-        if is_specular && (jacobian < 0.5 || jacobian > 2.0) {
-            continue;
+        if is_specular {
+            // 対策: Jacobianが極端に小さい/大きい場合は、接続が物理的に破綻しているとみなして捨てる
+            if jacobian < 0.5 || jacobian > 2.0 {
+                continue;
+            }
         }
         let dir_to_v1 = neighbor_r.s_path - pos_w.xyz;
         let dist_to_v1 = length(dir_to_v1);

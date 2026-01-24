@@ -332,9 +332,26 @@ fn sample_bsdf(wo: vec3f, hit: HitInfo, mat: Material, base_color: vec3f) -> Bsd
 
 // --- Main Path Tracer ---
 
+// restir_spatial.wgsl (または restir.wgsl)
+
 fn trace_shadow_ray(origin: vec3f, dir: vec3f, dist: f32) -> bool {
     var shadow_rq: ray_query;
-    rayQueryInitialize(&shadow_rq, tlas, RayDesc(0x4u, 0xFFu, 0.001, dist - 0.01, origin, dir));
+    
+    // 修正1: TMinを極小にする (1mm -> 0.1mm)
+    // 黒点を気にしないなら 0.0 でも良いですが、1e-4 が安全です。
+    let t_min = 0.0001; 
+
+    // 修正2: TMaxを「距離 - 固定値」ではなく「距離の99%」にする
+    // これにより、距離が1cm未満でも正しく判定されます。
+    let t_max = max(dist * 0.999, 0.0);
+
+    if t_min >= t_max {
+        // 距離が近すぎる場合は、レイを飛ばさずに「遮蔽なし」とみなすか、
+        // 呼び出し元で制御する。ここでは一旦「遮蔽なし」を返す。
+        return true;
+    }
+
+    rayQueryInitialize(&shadow_rq, tlas, RayDesc(0x4u, 0xFFu, t_min, t_max, origin, dir));
     rayQueryProceed(&shadow_rq);
     return rayQueryGetCommittedIntersection(&shadow_rq).kind == 0u;
 }
@@ -441,7 +458,9 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
     if mat_id < arrayLength(&materials) {
         let mat_static = materials[mat_id];
         mat = mat_static;
-        mat.base_color = vec4f(albedo_raw.rgb, 1.0);
+        if abs(mat.ior - 1.0) < 0.01 {
+            mat.base_color = vec4f(albedo_raw.rgb, 1.0);
+        }
     } else {
         mat.base_color = vec4f(albedo_raw.rgb, 1.0);
         mat.roughness = 0.0;
@@ -628,30 +647,73 @@ fn update_reservoir(r: ptr<function, Reservoir>, seed_cand: u32, w: f32, rnd: f3
     return false;
 }
 
-// ★推奨: よりロバストな判定関数
+
 fn is_valid_neighbor(
-    curr_pos: vec3f, curr_normal: vec3f, curr_mat: u32,
-    prev_pos: vec3f, prev_normal: vec3f, prev_mat: u32,
-    camera_pos: vec3f,
+    curr_pos: vec3f, curr_normal: vec3f, curr_mat_id: u32,
+    prev_pos: vec3f, prev_normal: vec3f, prev_mat_id: u32,
+    camera_pos: vec3f
 ) -> bool {
-    if curr_mat != prev_mat { return false; }
-    if dot(curr_normal, prev_normal) < 0.9 { return false; } // 約25度
+    // 基本チェック
+    if curr_mat_id != prev_mat_id { return false; }
 
-    // 位置チェックの改善:
-    // 単純な距離(sphere)ではなく、法線平面からの距離(plane distance)を見る
-    // これにより、同じ平面上なら遠くても許容し、段差は厳しく弾くことができます。
-    let pos_diff = prev_pos - curr_pos;
-    let plane_dist = abs(dot(curr_normal, pos_diff));
+    let mat = materials[curr_mat_id];
+    let is_specular = mat.roughness < 0.2 || mat.metallic > 0.8 || (mat.ior > 1.01 || mat.ior < 0.99);
 
-    // 許容誤差: カメラ距離の0.5%程度 + 定数
-    let dist_cam = length(curr_pos - camera_pos);
-    let threshold = 0.002 + dist_cam * 0.005;
-
-    if plane_dist > threshold { return false; }
+    if is_specular {
+        // 鏡面・ガラスの場合は、法線の不一致にめちゃくちゃ厳しくする（例: 3度以内）
+        if dot(curr_normal, prev_normal) < 0.998 { return false; }
+        
+        // 距離の差にも厳しくする
+        let dist_diff = distance(curr_pos, prev_pos);
+        if dist_diff > 0.01 { return false; }
+    } else {
+        // 通常の拡散反射素材
+        if dot(curr_normal, prev_normal) < 0.995 { return false; } // Stricter normal (approx 5.7 deg)
+        
+        // Check position distance to avoid leaking between disjoint surfaces
+        let dist_to_camera_sq = dot(curr_pos - camera_pos, curr_pos - camera_pos);
+        // Stricter depth threshold: 0.1% of distance squared (~3% of distance)
+        let threshold = max(0.00001, dist_to_camera_sq * 0.001);
+        let dist_diff_sq = dot(curr_pos - prev_pos, curr_pos - prev_pos);
+        if dist_diff_sq > threshold { return false; }
+    }
 
     return true;
 }
 
+// Jacobianの計算: Reconnection Shift用
+// curr_pos: 現在のピクセルの1次ヒット点
+// curr_normal: 現在のピクセルの1次ヒット点の法線
+// neighbor_v1_pos: 隣接ピクセルのパスにおける「第1バウンス目」のヒット点
+// neighbor_pos: 隣接ピクセルの1次ヒット点
+// neighbor_normal: 隣接ピクセルの1次ヒット点の法線
+fn calculate_jacobian(
+    curr_pos: vec3f,
+    curr_normal: vec3f,
+    neighbor_v1_pos: vec3f,
+    neighbor_pos: vec3f,
+    neighbor_normal: vec3f
+) -> f32 {
+    // 共有ヒット点(v1)へのベクトルと距離を計算
+    let dir_curr = neighbor_v1_pos - curr_pos;
+    let dist_sq_curr = max(dot(dir_curr, dir_curr), 0.01); // Increased floor to 10cm^2 to prevent huge boost
+    let cos_curr = max(dot(curr_normal, normalize(dir_curr)), 0.0);
+
+    let dir_neigh = neighbor_v1_pos - neighbor_pos;
+    let dist_sq_neigh = max(dot(dir_neigh, dir_neigh), 0.01);
+    let cos_neigh = max(dot(neighbor_normal, normalize(dir_neigh)), 0.0);
+
+    if cos_neigh <= 0.001 { return 0.0; } // Stricter cosine check
+
+    // 理論式: (cos_curr / cos_neigh) * (dist_sq_neigh / dist_sq_curr)
+    var jacobian = (cos_curr / cos_neigh) * (dist_sq_neigh / dist_sq_curr);
+
+    // ★重要: 境界が光る問題への対策1 (Clamping)
+    // 幾何学的に鋭角な場所でJacobianが爆発するのを防ぐ
+    jacobian = clamp(jacobian, 0.1, 3.0); // Tightened clamp [0.1, 3.0]
+
+    return jacobian;
+}
 
 
 @compute @workgroup_size(8, 8)
@@ -703,9 +765,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
     let mat = materials[mat_id];
     if mat.roughness < 0.1 || mat.metallic > 0.9 || mat.ior > 1.01 || mat.ior < 0.99 {
-        // num_neighbors = 0u;
         num_neighbors = 2u;
-        radius = 4.0; // かなりの近傍のみ探索する
+        // num_neighbors = 2u;
+        radius = 1.0; // かなりの近傍のみ探索する
     }
 
     for (var i = 0u; i < num_neighbors; i++) {
@@ -736,13 +798,50 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         if !is_valid_neighbor(pos_w.xyz, normal, mat_id, n_pos_w.xyz, n_normal, n_mat_id, camera_pos) { continue; }
 
         var neighbor_r = in_reservoirs[neighbor_idx];
-            
-        // --- Jacobian Logic ---
-        let pos_neigh = n_pos_w.xyz;
-        let pos_sample = neighbor_r.s_path;
-        var jacobian = 1.0;
 
-        var p_hat_corrected = neighbor_r.p_hat * jacobian;
+        if neighbor_r.p_hat <= 0.0 { continue; }
+
+        // --- Jacobianの計算 ---
+        let jacobian = calculate_jacobian(
+            pos_w.xyz,
+            normal,
+            neighbor_r.s_path, // neighborのパスの第1バウンス点
+            n_pos_w.xyz,
+            n_normal
+        );
+
+        // 鏡面素材の場合の追加対策
+        let mat = materials[mat_id];
+        let is_specular = mat.roughness < 0.1 || mat.metallic > 0.9 || (mat.ior > 1.01 || mat.ior < 0.99);
+
+        // 対策: Jacobianが極端に小さい/大きい場合は、接続が物理的に破綻しているとみなして捨てる
+        if is_specular && (jacobian < 0.5 || jacobian > 2.0) {
+            continue;
+        }
+        let dir_to_v1 = neighbor_r.s_path - pos_w.xyz;
+        let dist_to_v1 = length(dir_to_v1);
+        var visible = false;
+
+        if dot(normal, dir_to_v1) > 0.0 {
+
+            if dist_to_v1 > 0.001 {
+                let origin = pos_w.xyz;
+                let ray_dir = normalize(dir_to_v1);
+                let t_max = max(dist_to_v1, 0.0);
+
+                if trace_shadow_ray(origin, ray_dir, t_max) {
+                    visible = true;
+                }
+            } else {
+                visible = false;
+            }
+        }
+
+        if !visible { continue; }
+
+        // jacobian = 1.0;
+        // 3. 輝度の補正（ターゲット密度の更新）
+        let p_hat_corrected = neighbor_r.p_hat * jacobian;
         let M_new = min(neighbor_r.M, 20u);
         let weight = p_hat_corrected * neighbor_r.W * f32(M_new);
 
@@ -759,7 +858,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         // Unbiased Weight Calculation
         var w_unclamped = (1.0 / p_hat_final) * (r.w_sum / f32(r.M));
 
-        r.W = min(w_unclamped, 20.0);
+        r.W = clamp(w_unclamped, 0.0, 3.0);
 
         final_color = final_res.radiance * r.W;
         r.p_hat = p_hat_final;

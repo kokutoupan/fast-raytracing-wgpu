@@ -55,8 +55,8 @@ impl RestirSpatialPass {
         reservoirs_temporal: &wgpu::Buffer,      // Read (Input)
         reservoirs_spatial: &wgpu::Buffer,       // Write (Output)
         output_texture_view: &wgpu::TextureView, // Write (Color Output)
-        render_width: u32,
-        render_height: u32,
+        _render_width: u32,
+        _render_height: u32,
     ) -> Self {
         let shader = ctx
             .device

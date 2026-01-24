@@ -1,4 +1,4 @@
-use crate::passes::{BlitPass, GBufferPass, PostPass, RestirPass, RestirSpatialPass, ShadePass};
+use crate::passes::{BlitPass, GBufferPass, PostPass, RestirPass, RestirSpatialPass};
 use crate::scene;
 use crate::wgpu_ctx::WgpuContext;
 use crate::wgpu_utils::*;
@@ -388,13 +388,13 @@ impl Renderer {
         &mut self,
         ctx: &WgpuContext,
         view: &wgpu::TextureView,
-        camera_buffer: &wgpu::Buffer,
-        light_buffer: &wgpu::Buffer,
-        material_buffer: &wgpu::Buffer,
-        attribute_buffer: &wgpu::Buffer,
-        index_buffer: &wgpu::Buffer,
-        mesh_info_buffer: &wgpu::Buffer,
-        tlas: &wgpu::Tlas,
+        _camera_buffer: &wgpu::Buffer,
+        _light_buffer: &wgpu::Buffer,
+        _material_buffer: &wgpu::Buffer,
+        _attribute_buffer: &wgpu::Buffer,
+        _index_buffer: &wgpu::Buffer,
+        _mesh_info_buffer: &wgpu::Buffer,
+        _tlas: &wgpu::Tlas,
         light_count: u32,
     ) -> Result<(), wgpu::SurfaceError> {
         let mut encoder = ctx

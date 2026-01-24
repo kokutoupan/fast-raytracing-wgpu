@@ -348,6 +348,8 @@ impl Renderer {
             &targets.accumulation_buffer,
             &targets.pp_view,
             &post_params_buffer,
+            &targets.gbuffer_normal_view,
+            &targets.gbuffer_pos_view,
         );
 
         let blit_pass = BlitPass::new(ctx, &targets.pp_view, &sampler, &blit_params_buffer);
@@ -474,8 +476,12 @@ impl Renderer {
             // 3. Post Pass (Tonemap + Accumulate?)
             // RestirSpatialPass writes to raw_view.
             // PostPass reads raw_view, writes to pp_view.
-            self.post_pass
-                .execute(&mut encoder, self.render_width, self.render_height);
+            self.post_pass.execute(
+                &mut encoder,
+                self.render_width,
+                self.render_height,
+                self.frame_count,
+            );
         } else if debug_mode == 1 || debug_mode == 2 || debug_mode == 4 {
             // Visualize Float Texture (Pos / Normal / Motion) -> PostPass (Tonemap)
             let idx = (self.frame_count % 2) as usize;
@@ -506,8 +512,12 @@ impl Renderer {
                     depth_or_array_layers: 1,
                 },
             );
-            self.post_pass
-                .execute(&mut encoder, self.render_width, self.render_height);
+            self.post_pass.execute(
+                &mut encoder,
+                self.render_width,
+                self.render_height,
+                self.frame_count,
+            );
         } else {
             // Visualize Albedo (Unorm) -> Skip PostPass
             encoder.copy_texture_to_texture(

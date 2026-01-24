@@ -30,6 +30,10 @@ struct Reservoir {
     w_sum: f32,
     M: u32,
     W: f32,
+    p_hat: f32,
+    pad0: f32,
+    pad1: f32,
+    pad2: f32,
 }
 
 struct Material {
@@ -102,6 +106,10 @@ struct HitInfo {
 @group(0) @binding(10) var<storage, read> indices: array<u32>;
 @group(0) @binding(11) var<storage, read> mesh_infos: array<MeshInfo>;
 
+// Group 1: Textures
+@group(1) @binding(0) var tex_sampler: sampler;
+@group(1) @binding(1) var textures: texture_2d_array<f32>;
+
 // --- RNG ---
 var<private> rng_seed: u32;
 
@@ -144,9 +152,6 @@ fn fresnel_schlick(f0: vec3f, v_dot_h: f32) -> vec3f {
     return f0 + (1.0 - f0) * pow(clamp(1.0 - v_dot_h, 0.0, 1.0), 5.0);
 }
 
-// Group 1: Textures
-@group(1) @binding(0) var tex_sampler: sampler;
-@group(1) @binding(1) var textures: texture_2d_array<f32>;
 
 // --- Helper Functions ---
 fn reflectance(cosine: f32, ref_idx: f32) -> f32 {
@@ -309,47 +314,115 @@ fn sample_bsdf(wo: vec3f, hit: HitInfo, mat: Material, base_color: vec3f) -> Bsd
 }
 
 // --- Main Path Tracer ---
-@compute @workgroup_size(8, 8)
-fn main(@builtin(global_invocation_id) id: vec3u) {
-    let size = textureDimensions(out_color);
-    if id.x >= size.x || id.y >= size.y { return; }
 
-    let coord = vec2<i32>(id.xy);
-    let pixel_idx = id.y * size.x + id.x;
-    
-    // Seed RNG
-    init_rng(id.xy, size.x, camera.frame_count);
+fn trace_shadow_ray(origin: vec3f, dir: vec3f, dist: f32) -> bool {
+    var shadow_rq: ray_query;
+    rayQueryInitialize(&shadow_rq, tlas, RayDesc(0x4u, 0xFFu, 0.001, dist - 0.01, origin, dir));
+    rayQueryProceed(&shadow_rq);
+    return rayQueryGetCommittedIntersection(&shadow_rq).kind == 0u;
+}
+
+fn reconstruct_geometry_hit(
+    custom_data: u32,
+    prim_idx: u32,
+    bary: vec2f,
+    front_face: bool,
+    w2o: mat4x3<f32>,
+    t: f32,
+    ray_origin: vec3f,
+    ray_dir: vec3f
+) -> HitInfo {
+    var hit: HitInfo;
+
+    let raw_id = custom_data;
+    let mesh_id = raw_id >> 16u;
+    hit.mat_id = raw_id & 0xFFFFu;
+
+    let mesh_info = mesh_infos[mesh_id];
+    let idx_offset = mesh_info.index_offset + prim_idx * 3u;
+
+    let i0 = indices[idx_offset + 0u] + mesh_info.vertex_offset;
+    let i1 = indices[idx_offset + 1u] + mesh_info.vertex_offset;
+    let i2 = indices[idx_offset + 2u] + mesh_info.vertex_offset;
+
+    let v0 = attributes[i0];
+    let v1 = attributes[i1];
+    let v2 = attributes[i2];
+
+    let n0 = decode_octahedral_normal(v0.normal);
+    let n1 = decode_octahedral_normal(v1.normal);
+    let n2 = decode_octahedral_normal(v2.normal);
+
+    let u = bary.x;
+    let v = bary.y;
+    let w = 1.0 - u - v;
+
+    let local_normal = normalize(n0 * w + n1 * u + n2 * v);
+    let uv_interp = v0.uv * w + v1.uv * u + v2.uv * v;
+
+    // w2o is passed directly
+    // Assuming uniform scaling, we can transform normals with the same matrix
+    let m_inv = mat3x3f(w2o[0], w2o[1], w2o[2]);
+
+    hit.normal = normalize(local_normal * m_inv);
+    hit.uv = uv_interp;
+    hit.front_face = front_face;
+    hit.ffnormal = select(-hit.normal, hit.normal, hit.front_face);
+    hit.t = t;
+    hit.pos = ray_origin + ray_dir * hit.t;
+
+    return hit;
+}
+
+fn eval_direct_lighting(hit: HitInfo, wo: vec3f, mat: Material, base_color: vec3f, ls: LightSample, weight: f32) -> vec3f {
+    let offset_pos = hit.pos + hit.ffnormal * 0.001;
+    let L = normalize(ls.pos - offset_pos);
+    let dist = distance(ls.pos, offset_pos);
+
+    let n_dot_l = max(dot(hit.ffnormal, L), 0.0);
+    let l_dot_n = max(dot(-L, ls.normal), 0.0);
+
+    if n_dot_l > 0.0 && l_dot_n > 0.0 {
+        if trace_shadow_ray(offset_pos, L, dist) {
+            let f = eval_bsdf(hit.ffnormal, L, wo, mat, base_color);
+            let G = (n_dot_l * l_dot_n) / (dist * dist);
+            return ls.emission.rgb * ls.emission.a * f * G * weight;
+        }
+    }
+    return vec3f(0.0);
+}
+
+// --- Main Path Tracer ---
+fn trace_path(coord: vec2<i32>, seed: u32) -> vec3f {
+    rng_seed = seed;
+
+    let size = textureDimensions(out_color);
+    let pixel_idx = u32(coord.y) * size.x + u32(coord.x);
 
     // -------------------------------------------------------------------------
     // 0. Initial State from G-Buffer (Depth = 0)
     // -------------------------------------------------------------------------
     let pos_w = textureLoad(gbuffer_pos, coord, 0);
     if pos_w.w < 0.0 {
-        textureStore(out_color, coord, vec4f(0.0, 0.0, 0.0, 1.0)); // Background
-        return;
+        return vec3f(0.0); // Background
     }
     let normal_w = textureLoad(gbuffer_normal, coord, 0);
     let albedo_raw = textureLoad(gbuffer_albedo, coord, 0);
 
-    // Construct Primary Hit Info
     var hit: HitInfo;
     hit.pos = pos_w.xyz;
     hit.normal = decode_octahedral_normal(normal_w.xy);
     hit.front_face = true;
     hit.ffnormal = hit.normal;
-    // G-Buffer段階ではHit.tやUVは（デノイザ等で必要なければ）省略されがちなので
-    // ここではシェーディングに必要な最小限を持つ
+    // Note: hit.uv, hit.t, hit.mat_id are not fully reconstructed here as we use GBuffer data directly for material
 
-    // Construct Primary Material Proxy
-    // G-Bufferの情報からマテリアルを復元
     var mat: Material;
     let mat_id = u32(pos_w.w + 0.1);
     if mat_id < arrayLength(&materials) {
         let mat_static = materials[mat_id];
         mat = mat_static;
-        mat.base_color = vec4f(albedo_raw.rgb, 1.0); // Texture modulation込みの色
+        mat.base_color = vec4f(albedo_raw.rgb, 1.0);
     } else {
-        // Fallback
         mat.base_color = vec4f(albedo_raw.rgb, 1.0);
         mat.roughness = 0.0;
         mat.metallic = albedo_raw.a;
@@ -362,7 +435,6 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     var throughput = vec3f(1.0);
     var wo = normalize(camera.view_pos.xyz - hit.pos);
 
-    // State variables for next bounce
     var next_dir = vec3f(0.0);
     var last_bsdf_pdf = 0.0;
     var previous_was_diffuse = false;
@@ -370,42 +442,27 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     // -------------------------------------------------------------------------
     // 1. Primary Shading (Emission & ReSTIR NEE)
     // -------------------------------------------------------------------------
-    
-    // 1-1. Primary Emission
+
     if mat.light_index >= 0 {
         let light = lights[mat.light_index];
         accumulated_color += light.emission.rgb * light.emission.a;
-        // Primary Hitがライトならそこで終了（あるいは透過などあれば続くが今回は不透過前提）
-        textureStore(out_color, coord, vec4f(accumulated_color, 1.0));
-        return;
+        return accumulated_color;
     }
 
-    // 1-2. NEE (ReSTIR)
     let is_specular = (mat.metallic > 0.01) || (mat.ior > 1.01 || mat.ior < 0.99);
     if !is_specular {
-        let r = reservoirs[pixel_idx];
-        if r.W > 0.0 {
-            let light_idx = r.y;
-            let light = lights[light_idx];
-            let ls = sample_light(light_idx);
+        if camera.num_lights > 0u {
+            let light_idx = u32(rand() * f32(camera.num_lights));
+            if light_idx < camera.num_lights {
+                let ls = sample_light(light_idx);
 
-            let offset_pos = hit.pos + hit.ffnormal * 0.001;
-            let L = normalize(ls.pos - offset_pos);
-            let dist = distance(ls.pos, offset_pos);
+                let pdf_nee = ls.pdf * (1.0 / f32(camera.num_lights));
+                let p_bsdf = eval_pdf(hit.ffnormal, normalize(ls.pos - hit.pos), wo, mat);
+                let mis_weight_nee = pdf_nee / (pdf_nee + p_bsdf);
 
-            let n_dot_l = max(dot(hit.ffnormal, L), 0.0);
-            let l_dot_n = max(dot(-L, ls.normal), 0.0);
+                let weight = mis_weight_nee / pdf_nee;
 
-            if n_dot_l > 0.0 && l_dot_n > 0.0 {
-                var shadow_rq: ray_query;
-                rayQueryInitialize(&shadow_rq, tlas, RayDesc(0x4u, 0x1u, 0.001, dist - 0.01, offset_pos, L));
-                rayQueryProceed(&shadow_rq);
-                if rayQueryGetCommittedIntersection(&shadow_rq).kind == 0u {
-                    let f = eval_bsdf(hit.ffnormal, L, wo, mat, base_color);
-                    let G = (n_dot_l * l_dot_n) / (dist * dist);
-                    let Ld = ls.emission.rgb * ls.emission.a * f * G * r.W * (1.0 / ls.pdf);
-                    accumulated_color += Ld * throughput;
-                }
+                accumulated_color += eval_direct_lighting(hit, wo, mat, base_color, ls, weight) * throughput;
             }
         }
         previous_was_diffuse = true;
@@ -413,11 +470,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         previous_was_diffuse = false;
     }
 
-    // 1-3. BSDF Sample (Generate next ray)
     let sc = sample_bsdf(wo, hit, mat, base_color);
     if sc.weight.x <= 0.0 && sc.weight.y <= 0.0 && sc.weight.z <= 0.0 {
-        textureStore(out_color, coord, vec4f(accumulated_color, 1.0));
-        return;
+        return accumulated_color;
     }
     last_bsdf_pdf = sc.pdf;
     throughput *= sc.weight;
@@ -447,53 +502,25 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         let committed = rayQueryGetCommittedIntersection(&rq);
 
         if committed.kind == 0u {
-            // Miss (IBL or Sky color could go here)
             break;
         }
 
-        // --- Update Hit Info from Geometry ---
-        let raw_id = committed.instance_custom_data;
-        let mesh_id = raw_id >> 16u;
-        hit.mat_id = raw_id & 0xFFFFu;
-        let mesh_info = mesh_infos[mesh_id];
-        let idx_offset = mesh_info.index_offset + committed.primitive_index * 3u;
-        
-        // Load Indices
-        let i0 = indices[idx_offset + 0u] + mesh_info.vertex_offset;
-        let i1 = indices[idx_offset + 1u] + mesh_info.vertex_offset;
-        let i2 = indices[idx_offset + 2u] + mesh_info.vertex_offset;
+        // --- Update Hit Info from Geometry using Helper ---
+        hit = reconstruct_geometry_hit(
+            committed.instance_custom_data,
+            committed.primitive_index,
+            committed.barycentrics,
+            committed.front_face,
+            committed.world_to_object,
+            committed.t,
+            origin,
+            next_dir
+        );
 
-        // Load Attributes (Pos分離済み想定)
-        let v0 = attributes[i0];
-        let v1 = attributes[i1];
-        let v2 = attributes[i2];
-
-        // Decode Normals
-        let n0 = decode_octahedral_normal(v0.normal);
-        let n1 = decode_octahedral_normal(v1.normal);
-        let n2 = decode_octahedral_normal(v2.normal);
-
-        // Barycentric Interpolation
-        let u = committed.barycentrics.x;
-        let v = committed.barycentrics.y;
-        let w = 1.0 - u - v;
-
-        let local_normal = normalize(n0 * w + n1 * u + n2 * v);
-        let uv_interp = v0.uv * w + v1.uv * u + v2.uv * v;
-
-        let w2o = committed.world_to_object;
-        let m_inv = mat3x3f(w2o[0], w2o[1], w2o[2]);
-        
-        // Update Hit
-        hit.normal = normalize(local_normal * m_inv);
-        hit.uv = uv_interp;
-        hit.front_face = committed.front_face;
-        hit.ffnormal = select(-hit.normal, hit.normal, hit.front_face);
-        hit.t = committed.t;
-        hit.pos = origin + next_dir * hit.t; // Calculate Pos from Ray
-
-        // Update View Dir & Material
+        // Update View Dir
         wo = -next_dir;
+        
+        // Update Material & Base Color
         mat = materials[hit.mat_id];
         let tex_color = textureSampleLevel(textures, tex_sampler, hit.uv, i32(mat.tex_id), 0.0);
         base_color = mat.base_color.rgb * tex_color.rgb;
@@ -517,7 +544,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
                 }
                 accumulated_color += Le * throughput * mis_weight;
             }
-            break; // Stop at light
+            break;
         }
 
         // 2. NEE (Standard Random Light)
@@ -527,26 +554,16 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
                 let light_idx = u32(rand() * f32(camera.num_lights));
                 if light_idx < camera.num_lights {
                     let ls = sample_light(light_idx);
-                    let offset_pos_nee = hit.pos + hit.ffnormal * 0.001;
-                    let L = normalize(ls.pos - offset_pos_nee);
-                    let dist = distance(ls.pos, offset_pos_nee);
-                    let n_dot_l = max(dot(hit.ffnormal, L), 0.0);
-                    let l_dot_n = max(dot(-L, ls.normal), 0.0);
 
-                    if n_dot_l > 0.0 && l_dot_n > 0.0 {
-                        var shadow_rq: ray_query;
-                        rayQueryInitialize(&shadow_rq, tlas, RayDesc(0x4u, 0xFFu, 0.001, dist - 0.01, offset_pos_nee, L));
-                        rayQueryProceed(&shadow_rq);
-                        if rayQueryGetCommittedIntersection(&shadow_rq).kind == 0u {
-                            let f = eval_bsdf(hit.ffnormal, L, wo, mat, base_color);
-                            let G = (n_dot_l * l_dot_n) / (dist * dist);
-                            let pdf_nee = ls.pdf * (1.0 / f32(camera.num_lights));
-                            let p_bsdf = eval_pdf(hit.ffnormal, L, wo, mat);
-                            let mis_weight = pdf_nee / (pdf_nee + p_bsdf);
-                            let Ld = ls.emission.rgb * ls.emission.a * f * G * mis_weight / pdf_nee;
-                            accumulated_color += Ld * throughput;
-                        }
-                    }
+                    let pdf_nee = ls.pdf * (1.0 / f32(camera.num_lights));
+                    let p_bsdf = eval_pdf(hit.ffnormal, normalize(ls.pos - hit.pos), wo, mat);
+                    let mis_weight_nee = pdf_nee / (pdf_nee + p_bsdf);
+
+                    // We need to pass the weight such that `eval_direct_lighting` result = Contribution
+                    // Contribution = Le * f * G * (mis_weight / pdf_nee)
+                    let weight = mis_weight_nee / pdf_nee;
+
+                    accumulated_color += eval_direct_lighting(hit, wo, mat, base_color, ls, weight) * throughput;
                 }
             }
             previous_was_diffuse = true;
@@ -563,5 +580,25 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         next_dir = sc_bounce.wi;
     }
 
-    textureStore(out_color, coord, vec4f(accumulated_color, 1.0));
+    return accumulated_color;
+}
+
+@compute @workgroup_size(8, 8)
+fn main(@builtin(global_invocation_id) id: vec3u) {
+    let size = textureDimensions(out_color);
+    if id.x >= size.x || id.y >= size.y { return; }
+
+    let coord = vec2<i32>(id.xy);
+    
+    // Seed RNG
+    // let seed_base = id.x + id.y * size.x + camera.frame_count * 927163u;
+    // let seed = pcg_hash(seed_base);
+
+    let reservoir = reservoirs[id.y * size.x + id.x];
+    let seed = reservoir.y;
+
+    var color = trace_path(coord, seed);
+    color = color * reservoir.W;
+
+    textureStore(out_color, coord, vec4f(color, 1.0));
 }

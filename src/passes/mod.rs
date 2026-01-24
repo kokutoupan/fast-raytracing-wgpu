@@ -10,4 +10,3 @@ pub use gbuffer::GBufferPass;
 pub use post::PostPass;
 pub use restir::RestirPass;
 pub use restir_spatial::RestirSpatialPass;
-pub use shade::ShadePass;

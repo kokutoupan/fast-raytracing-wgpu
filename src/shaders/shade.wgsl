@@ -30,6 +30,10 @@ struct Reservoir {
     w_sum: f32,
     M: u32,
     W: f32,
+    p_hat: f32,
+    pad0: f32,
+    pad1: f32,
+    pad2: f32,
 }
 
 struct Material {

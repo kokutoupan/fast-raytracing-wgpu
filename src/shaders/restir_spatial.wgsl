@@ -30,6 +30,10 @@ struct Reservoir {
     w_sum: f32,
     M: u32,
     W: f32,
+    p_hat: f32,
+    pad0: f32,
+    pad1: f32,
+    pad2: f32,
 }
 
 struct Material {
@@ -613,11 +617,12 @@ fn luminance(c: vec3f) -> f32 {
     return dot(c, vec3f(0.2126, 0.7152, 0.0722));
 }
 
-fn update_reservoir(r: ptr<function, Reservoir>, seed_cand: u32, w: f32, rnd: f32, cnt: u32) -> bool {
+fn update_reservoir(r: ptr<function, Reservoir>, seed_cand: u32, w: f32, rnd: f32, cnt: u32, p_hat_new: f32) -> bool {
     (*r).w_sum += w;
     (*r).M += cnt;
     if rnd * (*r).w_sum < w {
         (*r).y = seed_cand;
+        (*r).p_hat = p_hat_new;
         return true;
     }
     return false;
@@ -667,6 +672,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         // 背景
         var r_out: Reservoir;
         r_out.w_sum = 0.0; r_out.W = 0.0;
+        r_out.M = 0u; r_out.y = 0u;
+        r_out.p_hat = 0.0;
+        r_out.pad0 = 0.0; r_out.pad1 = 0.0; r_out.pad2 = 0.0;
         out_reservoirs[pixel_idx] = r_out;
         return;
     }
@@ -680,7 +688,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
     // Spatial Loop (例えば 3~5近傍)
     let num_neighbors = 3u;
-    let radius = 30.0; // ピクセル半径 (ノイズの状況に合わせて調整)
+    let radius = 20.0; // ピクセル半径 (ノイズの状況に合わせて調整)
 
     for (var i = 0u; i < num_neighbors; i++) {
         // ランダムな近傍ピクセルを選ぶ
@@ -723,17 +731,18 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         let w_neighbor = p_hat_c * neighbor_r.W * f32(neighbor_r.M);
 
         // Accumulate exactly neighbor_r.M samples
-        update_reservoir(&r, neighbor_r.y, w_neighbor, rand_lcg(&local_seed), neighbor_r.M);
+        update_reservoir(&r, neighbor_r.y, w_neighbor, rand_lcg(&local_seed), neighbor_r.M, p_hat_c);
     }
 
-    // Finalize W
-    let final_res = trace_path(coord, r.y);
-    let p_hat_final = luminance(final_res.radiance);
+    // Finalize W using cached p_hat
+    let p_hat_final = r.p_hat;
 
     if p_hat_final > 0.0 {
         r.W = (1.0 / p_hat_final) * (r.w_sum / f32(r.M));
+        // r.p_hat is already set
     } else {
         r.W = 0.0;
+        r.p_hat = 0.0;
     }
 
     out_reservoirs[pixel_idx] = r;

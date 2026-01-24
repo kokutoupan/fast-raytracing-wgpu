@@ -5,10 +5,12 @@ use bytemuck::{Pod, Zeroable};
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct Reservoir {
-    pub y: u32,     // Light Index
-    pub w_sum: f32, // Sum of weights
-    pub m: u32,     // Number of samples seen
-    pub w: f32,     // Generalized weight
+    pub y: u32,        // Path seed
+    pub w_sum: f32,    // Sum of weights
+    pub m: u32,        // Number of samples seen
+    pub w: f32,        // Generalized weight
+    pub p_hat: f32,    // Target density (Luminance)
+    pub pad: [f32; 3], // Padding to align to 16 bytes (or 32)
 }
 
 impl Reservoir {
@@ -18,6 +20,8 @@ impl Reservoir {
             w_sum: 0.0,
             m: 0,
             w: 0.0,
+            p_hat: 0.0,
+            pad: [0.0; 3],
         }
     }
 }

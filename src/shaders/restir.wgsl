@@ -30,6 +30,10 @@ struct Reservoir {
     w_sum: f32,
     M: u32,
     W: f32,
+    p_hat: f32,
+    pad0: f32,
+    pad1: f32,
+    pad2: f32,
 }
 
 struct Material {
@@ -584,11 +588,12 @@ fn luminance(c: vec3f) -> f32 {
     return dot(c, vec3f(0.2126, 0.7152, 0.0722));
 }
 
-fn update_reservoir(r: ptr<function, Reservoir>, seed_cand: u32, w: f32, rnd: f32, cnt: u32) -> bool {
+fn update_reservoir(r: ptr<function, Reservoir>, seed_cand: u32, w: f32, rnd: f32, cnt: u32, p_hat_new: f32) -> bool {
     (*r).w_sum += w;
     (*r).M += cnt;
     if rnd * (*r).w_sum < w {
         (*r).y = seed_cand;
+        (*r).p_hat = p_hat_new;
         return true;
     }
     return false;
@@ -653,6 +658,8 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     r.M = 0u;
     r.W = 0.0;
     r.y = 0u;
+    r.p_hat = 0.0;
+    r.pad0 = 0.0; r.pad1 = 0.0; r.pad2 = 0.0;
 
     // =========================================================
     // Phase 1: Initial Candidate Generation (1本生成)
@@ -666,7 +673,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     // ここでは候補が1つだけなので、必ず採用される (rnd=0.5)
     // weight w = p_hat / source_pdf (source_pdf = 1.0 とみなす)
     // M accumulation: 1 sample
-    update_reservoir(&r, seed_candidate, p_hat, 0.5, 1u);
+    update_reservoir(&r, seed_candidate, p_hat, 0.5, 1u, p_hat);
 
     // 初期Wの計算
     if p_hat > 0.0 {
@@ -723,7 +730,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
                 // マージ実行 (Accumulate neighbor M)
                 // update_reservoir will add 'clamped_M' to current M.
-                update_reservoir(&r, prev_r.y, w_prev, rand_lcg(&local_seed), clamped_M);
+                update_reservoir(&r, prev_r.y, w_prev, rand_lcg(&local_seed), clamped_M, p_hat_prev);
             }
         }
     }
@@ -732,17 +739,15 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     // Phase 3: Finalize (Wの更新)
     // =========================================================
     
-    // 最終的に生き残ったシード (r.y) のターゲット確率密度 (p_hat) が必要。
-    // ※最適化: Phase 1で生き残っていれば p_hat、Phase 2で生き残っていれば p_hat_prev を
-    // 変数に入れて使い回せば、ここで3回目のトレースをしなくて済む。
-    // 今回は記述を単純にするため、コストを払って再計算する安全策をとる。
-    let final_radiance = trace_path(coord, r.y);
-    let p_hat_final = luminance(final_radiance);
+    // Finalize W using cached p_hat
+    let p_hat_final = r.p_hat;
 
     if p_hat_final > 0.0 {
         r.W = (1.0 / p_hat_final) * (r.w_sum / f32(r.M));
+        // r.p_hat is already set
     } else {
         r.W = 0.0;
+        r.p_hat = 0.0;
     }
 
     curr_reservoirs[pixel_idx] = r;

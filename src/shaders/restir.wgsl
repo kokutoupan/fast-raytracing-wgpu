@@ -30,10 +30,8 @@ struct Reservoir {
     w_sum: f32,
     M: u32,
     W: f32,
+    s_path: vec3f,
     p_hat: f32,
-    pad0: f32,
-    pad1: f32,
-    pad2: f32,
 }
 
 struct Material {
@@ -81,6 +79,13 @@ struct HitInfo {
     mat_id: u32,
     front_face: bool,
     t: f32,
+}
+
+struct PathResult {
+    radiance: vec3f,
+    valid_v1: bool,
+    v1_pos: vec3f,
+    v1_normal: vec3f,
 }
 
 // --- Bindings ---
@@ -393,9 +398,14 @@ fn eval_direct_lighting(hit: HitInfo, wo: vec3f, mat: Material, base_color: vec3
     }
     return vec3f(0.0);
 }
-
-fn trace_path(coord: vec2<i32>, seed: u32) -> vec3f {
+fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
     rng_seed = seed;
+
+    var result: PathResult;
+    result.radiance = vec3f(0.0);
+    result.valid_v1 = false;
+    result.v1_pos = vec3f(0.0);
+    result.v1_normal = vec3f(0.0);
 
     let size = textureDimensions(gbuffer_pos);
     let pixel_idx = u32(coord.y) * size.x + u32(coord.x);
@@ -405,7 +415,7 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> vec3f {
     // -------------------------------------------------------------------------
     let pos_w = textureLoad(gbuffer_pos, coord, 0);
     if pos_w.w < 0.0 {
-        return vec3f(0.0); // Background
+        return result; // Background
     }
     let normal_w = textureLoad(gbuffer_normal, coord, 0);
     let albedo_raw = textureLoad(gbuffer_albedo, coord, 0);
@@ -447,7 +457,8 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> vec3f {
     if mat.light_index >= 0 {
         let light = lights[mat.light_index];
         accumulated_color += light.emission.rgb * light.emission.a;
-        return accumulated_color;
+        result.radiance = accumulated_color;
+        return result;
     }
 
     let is_specular = (mat.metallic > 0.01) || (mat.ior > 1.01 || mat.ior < 0.99);
@@ -473,7 +484,8 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> vec3f {
 
     let sc = sample_bsdf(wo, hit, mat, base_color);
     if sc.weight.x <= 0.0 && sc.weight.y <= 0.0 && sc.weight.z <= 0.0 {
-        return accumulated_color;
+        result.radiance = accumulated_color;
+        return result;
     }
     last_bsdf_pdf = sc.pdf;
     throughput *= sc.weight;
@@ -517,6 +529,12 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> vec3f {
             origin,
             next_dir
         );
+        // ★Shift Mapping用: 第1バウンスの情報を記録
+        if depth == 1u {
+            result.valid_v1 = true;
+            result.v1_pos = hit.pos;
+            result.v1_normal = hit.normal;
+        }
 
         // Update View Dir
         wo = -next_dir;
@@ -579,8 +597,10 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> vec3f {
         next_dir = sc_bounce.wi;
     }
 
-    return accumulated_color;
+    result.radiance = accumulated_color;
+    return result;
 }
+
 
 // --- ReSTIR Helpers ---
 
@@ -588,12 +608,13 @@ fn luminance(c: vec3f) -> f32 {
     return dot(c, vec3f(0.2126, 0.7152, 0.0722));
 }
 
-fn update_reservoir(r: ptr<function, Reservoir>, seed_cand: u32, w: f32, rnd: f32, cnt: u32, p_hat_new: f32) -> bool {
+fn update_reservoir(r: ptr<function, Reservoir>, seed_cand: u32, w: f32, rnd: f32, cnt: u32, p_hat_new: f32, s_path_new: vec3f) -> bool {
     (*r).w_sum += w;
     (*r).M += cnt;
     if rnd * (*r).w_sum < w {
         (*r).y = seed_cand;
         (*r).p_hat = p_hat_new;
+        (*r).s_path = s_path_new;
         return true;
     }
     return false;
@@ -659,21 +680,21 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     r.W = 0.0;
     r.y = 0u;
     r.p_hat = 0.0;
-    r.pad0 = 0.0; r.pad1 = 0.0; r.pad2 = 0.0;
+    r.s_path = vec3f(0.0);
 
     // =========================================================
     // Phase 1: Initial Candidate Generation (1本生成)
     // =========================================================
     
     // 新しいシードでパスをトレースし、その明るさ(p_hat)を評価
-    let path_radiance = trace_path(coord, seed_candidate);
-    let p_hat = luminance(path_radiance);
+    let path_result = trace_path(coord, seed_candidate);
+    let p_hat = luminance(path_result.radiance);
 
     // Reservoirに登録 (RIS)
     // ここでは候補が1つだけなので、必ず採用される (rnd=0.5)
     // weight w = p_hat / source_pdf (source_pdf = 1.0 とみなす)
     // M accumulation: 1 sample
-    update_reservoir(&r, seed_candidate, p_hat, 0.5, 1u, p_hat);
+    update_reservoir(&r, seed_candidate, p_hat, 0.5, 1u, p_hat, path_result.v1_pos);
 
     // 初期Wの計算
     if p_hat > 0.0 {
@@ -715,8 +736,8 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
             var prev_r = prev_reservoirs[prev_pixel_idx];
             
             // ★重要: Replay (再評価) ★
-            let prev_replay_radiance = trace_path(coord, prev_r.y);
-            let p_hat_prev = luminance(prev_replay_radiance);
+            let prev_replay_path_result = trace_path(coord, prev_r.y);
+            let p_hat_prev = luminance(prev_replay_path_result.radiance);
 
             // 明るさが0でない有効なパスならマージ
             if p_hat_prev > 0.0 {
@@ -730,7 +751,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
                 // マージ実行 (Accumulate neighbor M)
                 // update_reservoir will add 'clamped_M' to current M.
-                update_reservoir(&r, prev_r.y, w_prev, rand_lcg(&local_seed), clamped_M, p_hat_prev);
+                update_reservoir(&r, prev_r.y, w_prev, rand_lcg(&local_seed), clamped_M, p_hat_prev, prev_replay_path_result.v1_pos);
             }
         }
     }

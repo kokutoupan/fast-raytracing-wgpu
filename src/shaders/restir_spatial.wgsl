@@ -30,10 +30,8 @@ struct Reservoir {
     w_sum: f32,
     M: u32,
     W: f32,
+    s_path: vec3f,
     p_hat: f32,
-    pad0: f32,
-    pad1: f32,
-    pad2: f32,
 }
 
 struct Material {
@@ -618,35 +616,39 @@ fn luminance(c: vec3f) -> f32 {
     return dot(c, vec3f(0.2126, 0.7152, 0.0722));
 }
 
-fn update_reservoir(r: ptr<function, Reservoir>, seed_cand: u32, w: f32, rnd: f32, cnt: u32, p_hat_new: f32) -> bool {
+fn update_reservoir(r: ptr<function, Reservoir>, seed_cand: u32, w: f32, rnd: f32, cnt: u32, p_hat_new: f32, s_path_new: vec3f) -> bool {
     (*r).w_sum += w;
     (*r).M += cnt;
     if rnd * (*r).w_sum < w {
         (*r).y = seed_cand;
         (*r).p_hat = p_hat_new;
+        (*r).s_path = s_path_new;
         return true;
     }
     return false;
 }
 
+// ★推奨: よりロバストな判定関数
 fn is_valid_neighbor(
     curr_pos: vec3f, curr_normal: vec3f, curr_mat: u32,
     prev_pos: vec3f, prev_normal: vec3f, prev_mat: u32,
     camera_pos: vec3f,
 ) -> bool {
-    // 1. マテリアルIDチェック
     if curr_mat != prev_mat { return false; }
-    
-    // 2. 法線チェック (角度差が大きすぎないか)
-    if dot(curr_normal, prev_normal) < 0.9 { return false; }
+    if dot(curr_normal, prev_normal) < 0.9 { return false; } // 約25度
 
-    // 3. 位置チェック (カメラ距離に応じた許容誤差)
-    let dist_diff_sq = dot(curr_pos - prev_pos, curr_pos - prev_pos);
-    let dist_to_camera_sq = dot(curr_pos - camera_pos, curr_pos - camera_pos);
-    // カメラに近いほど厳しく、遠いほど緩く (画面上のピクセルズレ許容)
-    let threshold = max(0.001, dist_to_camera_sq * 0.01);
+    // 位置チェックの改善:
+    // 単純な距離(sphere)ではなく、法線平面からの距離(plane distance)を見る
+    // これにより、同じ平面上なら遠くても許容し、段差は厳しく弾くことができます。
+    let pos_diff = prev_pos - curr_pos;
+    let plane_dist = abs(dot(curr_normal, pos_diff));
 
-    if dist_diff_sq > threshold { return false; }
+    // 許容誤差: カメラ距離の0.5%程度 + 定数
+    let dist_cam = length(curr_pos - camera_pos);
+    let threshold = 0.002 + dist_cam * 0.005;
+
+    if plane_dist > threshold { return false; }
+
     return true;
 }
 
@@ -675,7 +677,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         r_out.w_sum = 0.0; r_out.W = 0.0;
         r_out.M = 0u; r_out.y = 0u;
         r_out.p_hat = 0.0;
-        r_out.pad0 = 0.0; r_out.pad1 = 0.0; r_out.pad2 = 0.0;
+        r_out.s_path = vec3f(0.0);
         out_reservoirs[pixel_idx] = r_out;
         textureStore(out_tex, coord, vec4f(0.0)); // <--- Fix ghosting
         return;
@@ -687,13 +689,24 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
     // 自分のReservoirを読み込む
     var r = in_reservoirs[pixel_idx];
+    if r.M > 20u {
+        r.w_sum *= 20.0 / f32(r.M);
+        r.M = 20u;
+    }
 
 
     let camera_pos = camera.view_pos.xyz;
 
     // Spatial Loop (例えば 3~5近傍)
-    let num_neighbors = 3u;
-    let radius = 10.0; // ピクセル半径 (ノイズの状況に合わせて調整)
+    var num_neighbors = 5u;
+    var radius = 10.0; // ピクセル半径 (ノイズの状況に合わせて調整)
+
+    let mat = materials[mat_id];
+    if mat.roughness < 0.1 || mat.metallic > 0.9 || mat.ior > 1.01 || mat.ior < 0.99 {
+        // num_neighbors = 0u;
+        num_neighbors = 2u;
+        radius = 4.0; // かなりの近傍のみ探索する
+    }
 
     for (var i = 0u; i < num_neighbors; i++) {
         // ランダムな近傍ピクセルを選ぶ
@@ -715,6 +728,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         
         // 近傍のG-Bufferチェック (幾何的類似性)
         let n_pos_w = textureLoad(gbuffer_pos, neighbor_coord, 0);
+        if n_pos_w.w < 0.0 { continue; }
         let n_normal_w = textureLoad(gbuffer_normal, neighbor_coord, 0);
         let n_normal = decode_octahedral_normal(n_normal_w.xy);
         let n_mat_id = u32(n_pos_w.w + 0.1);
@@ -723,29 +737,31 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
         var neighbor_r = in_reservoirs[neighbor_idx];
             
-        // --- Shift Mapping Logic (Primary Sample Space) ---
-        
-        
-        // 履歴長(M)の制限 (ゴースト低減)
-        let M_new = min(neighbor_r.M, 20u);
+        // --- Jacobian Logic ---
+        let pos_neigh = n_pos_w.xyz;
+        let pos_sample = neighbor_r.s_path;
+        var jacobian = 1.0;
 
-        // RIS Weight = p_hat * W * M
-        // neighbor_r.W は既に正規化されているので、以下の計算で「寄与分」が出ます。
-        let weight = neighbor_r.p_hat * neighbor_r.W * f32(M_new);
-        update_reservoir(&r, neighbor_r.y, weight, rand_lcg(&local_seed), M_new, neighbor_r.p_hat);
+        var p_hat_corrected = neighbor_r.p_hat * jacobian;
+        let M_new = min(neighbor_r.M, 20u);
+        let weight = p_hat_corrected * neighbor_r.W * f32(M_new);
+
+        update_reservoir(&r, neighbor_r.y, weight, rand_lcg(&local_seed), M_new, p_hat_corrected, neighbor_r.s_path);
     }
 
     // Finalize
     let final_res = trace_path(coord, r.y);
     var final_color = vec3f(0.0);
     let p_hat_final = luminance(final_res.radiance); // 生の輝度
+    r.s_path = final_res.v1_pos;
 
     if p_hat_final > 0.0 {
         // Unbiased Weight Calculation
-        r.W = (1.0 / p_hat_final) * (r.w_sum / f32(r.M));
+        var w_unclamped = (1.0 / p_hat_final) * (r.w_sum / f32(r.M));
+
+        r.W = min(w_unclamped, 20.0);
 
         final_color = final_res.radiance * r.W;
-
         r.p_hat = p_hat_final;
     } else {
         r.W = 0.0;

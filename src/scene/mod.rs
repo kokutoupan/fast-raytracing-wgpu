@@ -41,7 +41,11 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     let mat_red = builder.add_material(Material::new([0.65, 0.05, 0.05, 1.0]).texture(0));
     let mat_green = builder.add_material(Material::new([0.12, 0.45, 0.15, 1.0]).texture(0));
     let mat_white = builder.add_material(Material::new([0.73, 0.73, 0.73, 1.0]).texture(0));
-    let mat_checker = builder.add_material(Material::new([0.73, 0.73, 0.73, 1.0]).texture(1));
+    let mat_checker = builder.add_material(
+        Material::new([0.73, 0.73, 0.73, 1.0])
+            .roughness(0.99) // Matte
+            .texture(1),
+    );
     let mat_rough_metal = builder.add_material(
         Material::new([0.8, 0.8, 0.8, 1.0])
             .metallic(0.01)
@@ -176,8 +180,16 @@ pub fn create_restir_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneR
     let cube_id = builder.add_mesh(cube_geo);
 
     // 3. マテリアル
-    let mat_floor = builder.add_material(Material::new([0.73, 0.73, 0.73, 1.0]).texture(0));
-    let mat_wall = builder.add_material(Material::new([0.73, 0.73, 0.73, 1.0]).texture(0));
+    let mat_floor = builder.add_material(
+        Material::new([0.73, 0.73, 0.73, 1.0])
+            .roughness(0.99)
+            .texture(0),
+    );
+    let mat_wall = builder.add_material(
+        Material::new([0.73, 0.73, 0.73, 1.0])
+            .roughness(0.99)
+            .texture(0),
+    );
     let mat_metal =
         builder.add_material(Material::new([1.0, 1.0, 1.0, 1.0]).metallic(0.2).texture(0));
 

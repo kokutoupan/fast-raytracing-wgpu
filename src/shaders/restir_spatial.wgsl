@@ -185,13 +185,13 @@ fn ndf_ggx(n_dot_h: f32, roughness: f32) -> f32 {
     return a2 / (PI * d * d);
 }
 
-fn geometry_schlick_ggx(n_dot_v: f32, k: f32) -> f32 {
-    return n_dot_v / (n_dot_v * (1.0 - k) + k);
+fn geometry_schlick_ggx(n_dot_v: f32, roughness: f32) -> f32 {
+    let a2 = roughness * roughness;
+    return 2.0 * n_dot_v / (n_dot_v + sqrt(a2 + (1.0 - a2) * n_dot_v * n_dot_v));
 }
 
 fn geometry_smith(n_dot_l: f32, n_dot_v: f32, roughness: f32) -> f32 {
-    let k = (roughness * roughness) / 2.0;
-    return geometry_schlick_ggx(n_dot_l, k) * geometry_schlick_ggx(n_dot_v, k);
+    return geometry_schlick_ggx(n_dot_l, roughness) * geometry_schlick_ggx(n_dot_v, roughness);
 }
 
 fn sample_ggx_vndf(wo: vec3f, roughness: f32, u: vec2f) -> vec3f {
@@ -255,14 +255,13 @@ fn eval_pdf(normal: vec3f, wi: vec3f, wo: vec3f, mat: Material, base_color: vec3
     let F = fresnel_schlick(F0, max(dot(normal, wo), 0.0));
     let lum_spec = luminance(F);
     let lum_diff = luminance(base_color * (1.0 - mat.metallic));
-    let prob_spec = clamp(lum_spec / (lum_spec + lum_diff + 0.001), 0.05, 0.95);
+    let prob_spec = clamp(lum_spec / (lum_spec + lum_diff + 0.0001), 0.001, 0.999);
 
     // Specular PDF
     let h = normalize(wi + wo);
     let n_dot_h = max(dot(normal, h), 0.0);
     let d = ndf_ggx(n_dot_h, mat.roughness);
-    let k = (mat.roughness * mat.roughness) / 2.0;
-    let g1 = geometry_schlick_ggx(n_dot_v, k);
+    let g1 = geometry_schlick_ggx(n_dot_v, mat.roughness);
     let pdf_spec = (d * g1) / (4.0 * n_dot_v);
 
     // Diffuse PDF
@@ -327,7 +326,7 @@ fn sample_bsdf(wo: vec3f, hit: HitInfo, mat: Material, base_color: vec3f) -> Bsd
     // Calculate selection probability based on estimated luminance contribution
     let lum_spec = luminance(F_view);
     let lum_diff = luminance(base_color * (1.0 - mat.metallic));
-    let prob_spec = clamp(lum_spec / (lum_spec + lum_diff + 0.001), 0.05, 0.95);
+    let prob_spec = clamp(lum_spec / (lum_spec + lum_diff + 0.0001), 0.001, 0.999);
 
     let rnd = rand();
     if rnd < prob_spec {
@@ -525,7 +524,9 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
         return result;
     }
 
-    let is_specular = (mat.metallic > 0.01) || (mat.ior > 1.01 || mat.ior < 0.99);
+    let is_glass = (mat.ior > 1.01 || mat.ior < 0.99);
+    let is_smooth_metal = (mat.metallic > 0.01) && (mat.roughness < 0.05);
+    let is_specular = is_glass || is_smooth_metal;
     if !is_specular {
         if camera.num_lights > 0u {
             let light_idx = u32(rand() * f32(camera.num_lights));
@@ -631,7 +632,9 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
         }
 
         // 2. NEE (Standard Random Light)
-        let is_specular_bounce = (mat.metallic > 0.01) || (mat.ior > 1.01 || mat.ior < 0.99);
+        let is_glass_bounce = (mat.ior > 1.01 || mat.ior < 0.99);
+        let is_smooth_metal_bounce = (mat.metallic > 0.01) && (mat.roughness < 0.05);
+        let is_specular_bounce = is_glass_bounce || is_smooth_metal_bounce;
         if !is_specular_bounce {
             if camera.num_lights > 0u {
                 let light_idx = u32(rand() * f32(camera.num_lights));
@@ -752,7 +755,7 @@ fn calculate_jacobian(
 
     // ★重要: 境界が光る問題への対策1 (Clamping)
     // 幾何学的に鋭角な場所でJacobianが爆発するのを防ぐ
-    jacobian = clamp(jacobian, 0.1, 3.0); // Tightened clamp [0.1, 3.0]
+    jacobian = clamp(jacobian, 0.1, 10.0); // Relaxed clamp [0.1, 10.0] to prevent darkening
 
     return jacobian;
 }
@@ -906,7 +909,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         // Unbiased Weight Calculation
         var w_unclamped = (1.0 / p_hat_final) * (r.w_sum / f32(r.M));
 
-        r.W = clamp(w_unclamped, 0.0, 3.0);
+        r.W = clamp(w_unclamped, 0.0, 20.0); // Relaxed clamp to 20.0 to allow energy compensation
 
         final_color = final_res.radiance * r.W;
         r.p_hat = p_hat_final;

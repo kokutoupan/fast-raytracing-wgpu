@@ -183,13 +183,17 @@ fn ndf_ggx(n_dot_h: f32, roughness: f32) -> f32 {
     return a2 / (PI * d * d);
 }
 
-fn geometry_schlick_ggx(n_dot_v: f32, k: f32) -> f32 {
-    return n_dot_v / (n_dot_v * (1.0 - k) + k);
+fn geometry_schlick_ggx(n_dot_v: f32, roughness: f32) -> f32 {
+    let a = roughness; // For G1, we use alpha = roughness (not roughness^2 if remapped, but standard GGX usually uses alpha. Here assuming roughness param is linear roughness)
+    // However, widely used Smith-Schlick approximation uses k = alpha^2 / 2 ? No, for IBL k=alpha^2/2, for Direct k=(alpha+1)^2/8.
+    // Let's implement EXACT G1 for GGX to match VNDF sampling perfectly.
+
+    let a2 = roughness * roughness;
+    return 2.0 * n_dot_v / (n_dot_v + sqrt(a2 + (1.0 - a2) * n_dot_v * n_dot_v));
 }
 
 fn geometry_smith(n_dot_l: f32, n_dot_v: f32, roughness: f32) -> f32 {
-    let k = (roughness * roughness) / 2.0;
-    return geometry_schlick_ggx(n_dot_l, k) * geometry_schlick_ggx(n_dot_v, k);
+    return geometry_schlick_ggx(n_dot_l, roughness) * geometry_schlick_ggx(n_dot_v, roughness);
 }
 
 fn sample_ggx_vndf(wo: vec3f, roughness: f32, u: vec2f) -> vec3f {
@@ -253,14 +257,13 @@ fn eval_pdf(normal: vec3f, wi: vec3f, wo: vec3f, mat: Material, base_color: vec3
     let F = fresnel_schlick(F0, max(dot(normal, wo), 0.0));
     let lum_spec = luminance(F);
     let lum_diff = luminance(base_color * (1.0 - mat.metallic));
-    let prob_spec = clamp(lum_spec / (lum_spec + lum_diff + 0.001), 0.05, 0.95);
+    let prob_spec = clamp(lum_spec / (lum_spec + lum_diff + 0.0001), 0.001, 0.999);
 
     // Specular PDF
     let h = normalize(wi + wo);
     let n_dot_h = max(dot(normal, h), 0.0);
     let d = ndf_ggx(n_dot_h, mat.roughness);
-    let k = (mat.roughness * mat.roughness) / 2.0;
-    let g1 = geometry_schlick_ggx(n_dot_v, k);
+    let g1 = geometry_schlick_ggx(n_dot_v, mat.roughness); // Use G1(v)
     let pdf_spec = (d * g1) / (4.0 * n_dot_v);
 
     // Diffuse PDF
@@ -325,7 +328,7 @@ fn sample_bsdf(wo: vec3f, hit: HitInfo, mat: Material, base_color: vec3f) -> Bsd
     // Calculate selection probability based on estimated luminance contribution
     let lum_spec = luminance(F_view);
     let lum_diff = luminance(base_color * (1.0 - mat.metallic));
-    let prob_spec = clamp(lum_spec / (lum_spec + lum_diff + 0.001), 0.05, 0.95);
+    let prob_spec = clamp(lum_spec / (lum_spec + lum_diff + 0.0001), 0.001, 0.999);
 
     let rnd = rand();
     if rnd < prob_spec {
@@ -368,7 +371,8 @@ fn sample_bsdf(wo: vec3f, hit: HitInfo, mat: Material, base_color: vec3f) -> Bsd
 
 fn trace_shadow_ray(origin: vec3f, dir: vec3f, dist: f32) -> bool {
     var shadow_rq: ray_query;
-    rayQueryInitialize(&shadow_rq, tlas, RayDesc(0x4u, 0xFFu, 0.001, dist - 0.01, origin, dir));
+    let t_max = max(dist * 0.999, 0.0);
+    rayQueryInitialize(&shadow_rq, tlas, RayDesc(0x4u, 0xFFu, 0.001, t_max, origin, dir));
     rayQueryProceed(&shadow_rq);
     return rayQueryGetCommittedIntersection(&shadow_rq).kind == 0u;
 }
@@ -503,7 +507,9 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
         return result;
     }
 
-    let is_specular = (mat.metallic > 0.01) || (mat.ior > 1.01 || mat.ior < 0.99);
+    let is_glass = (mat.ior > 1.01 || mat.ior < 0.99);
+    let is_smooth_metal = (mat.metallic > 0.01) && (mat.roughness < 0.05);
+    let is_specular = is_glass || is_smooth_metal;
     if !is_specular {
         if camera.num_lights > 0u {
             let light_idx = u32(rand() * f32(camera.num_lights));
@@ -609,7 +615,9 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
         }
 
         // 2. NEE (Standard Random Light)
-        let is_specular_bounce = (mat.metallic > 0.01) || (mat.ior > 1.01 || mat.ior < 0.99);
+        let is_glass_bounce = (mat.ior > 1.01 || mat.ior < 0.99);
+        let is_smooth_metal_bounce = (mat.metallic > 0.01) && (mat.roughness < 0.05);
+        let is_specular_bounce = is_glass_bounce || is_smooth_metal_bounce;
         if !is_specular_bounce {
             if camera.num_lights > 0u {
                 let light_idx = u32(rand() * f32(camera.num_lights));
@@ -667,17 +675,18 @@ fn is_valid_neighbor(
     prev_pos: vec3f, prev_normal: vec3f, prev_mat: u32,
     camera_pos: vec3f,
 ) -> bool {
-    // 1. マテリアルIDチェック
+    // 1. Material ID Check
     if curr_mat != prev_mat { return false; }
     
-    // 2. 法線チェック (角度差が大きすぎないか)
-    if dot(curr_normal, prev_normal) < 0.9 { return false; }
+    // 2. Normal Check (Stricter)
+    if dot(curr_normal, prev_normal) < 0.99 { return false; }
 
-    // 3. 位置チェック (カメラ距離に応じた許容誤差)
+    // 3. Position Check (Relative to camera distance)
     let dist_diff_sq = dot(curr_pos - prev_pos, curr_pos - prev_pos);
     let dist_to_camera_sq = dot(curr_pos - camera_pos, curr_pos - camera_pos);
-    // カメラに近いほど厳しく、遠いほど緩く (画面上のピクセルズレ許容)
-    let threshold = max(0.001, dist_to_camera_sq * 0.01);
+    
+    // Stricter threshold: 0.1% of distance squared
+    let threshold = max(0.00001, dist_to_camera_sq * 0.001);
 
     if dist_diff_sq > threshold { return false; }
     return true;
@@ -769,12 +778,17 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         let curr_normal_data = textureLoad(gbuffer_normal, coord, 0);
         let curr_normal = decode_octahedral_normal(curr_normal_data.xy);
         let curr_mat_id = u32(pos_w.w + 0.1);
+        let mat = materials[curr_mat_id];
+        // FIX: Flashing Floor/Highlights
+        // Disable temporal reuse for specular/glossy surfaces because highlights are view-dependent
+        // and reusing p_hat from previous frame (different view angle) is invalid.
+        let is_specular = mat.roughness < 0.2 || mat.metallic > 0.8 || (mat.ior > 1.01 || mat.ior < 0.99);
 
         if is_valid_neighbor(
             pos_w.xyz, curr_normal, curr_mat_id,
             prev_pos_data.xyz, prev_normal, prev_mat_id,
             camera.view_pos.xyz
-        ) {
+        ) && !is_specular {
             var prev_r = prev_reservoirs[prev_pixel_idx];
             
             // ALBEDO CORRECTION (No Replay)
@@ -784,14 +798,18 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
             let l_prev = luminance(prev_albedo) + 0.001;
             let albedo_ratio = l_curr / l_prev;
 
-            // Use stored p_hat corrected by albedo change
-            let p_hat_new = prev_r.p_hat * albedo_ratio;
+            // FIX: Exploding weights
+            // If albedo changed significantly (disocclusion or texture boundary), reject history.
+            if albedo_ratio < 3.0 && albedo_ratio > 0.33 {
+                // Use stored p_hat corrected by albedo change
+                let p_hat_new = prev_r.p_hat * albedo_ratio;
 
-            if p_hat_new > 0.0 {
-                let clamped_M = min(prev_r.M, MAX_RESERVOIR_M_TEMPORAL);
-                let w_prev = p_hat_new * prev_r.W * f32(clamped_M);
+                if p_hat_new > 0.0 {
+                    let clamped_M = min(prev_r.M, MAX_RESERVOIR_M_TEMPORAL);
+                    let w_prev = p_hat_new * prev_r.W * f32(clamped_M);
 
-                update_reservoir(&r, prev_r.y, w_prev, rand_lcg(&local_seed), clamped_M, p_hat_new, prev_r.s_path);
+                    update_reservoir(&r, prev_r.y, w_prev, rand_lcg(&local_seed), clamped_M, p_hat_new, prev_r.s_path);
+                }
             }
         }
     }

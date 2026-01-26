@@ -3,7 +3,6 @@ pub mod gbuffer;
 pub mod post;
 pub mod restir;
 pub mod restir_spatial;
-pub mod shade;
 
 pub use blit::BlitPass;
 pub use gbuffer::GBufferPass;

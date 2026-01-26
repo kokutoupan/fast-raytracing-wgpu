@@ -37,6 +37,11 @@ impl Material {
         self
     }
 
+    pub fn roughness(mut self, roughness: f32) -> Self {
+        self.roughness = roughness;
+        self
+    }
+
     pub fn glass(mut self, ior: f32) -> Self {
         self.metallic = 0.0;
         self.roughness = 0.0;

@@ -696,17 +696,16 @@ fn calculate_jacobian(
 ) -> f32 {
     // 共有ヒット点(v1)へのベクトルと距離を計算
     let dir_curr = neighbor_v1_pos - curr_pos;
-    let dist_sq_curr = max(dot(dir_curr, dir_curr), 0.01); // Increased floor to 10cm^2 to prevent huge boost
     let cos_curr = max(dot(curr_normal, normalize(dir_curr)), 0.0);
 
     let dir_neigh = neighbor_v1_pos - neighbor_pos;
-    let dist_sq_neigh = max(dot(dir_neigh, dir_neigh), 0.01);
     let cos_neigh = max(dot(neighbor_normal, normalize(dir_neigh)), 0.0);
 
     if cos_neigh <= 0.001 { return 0.0; } // Stricter cosine check
 
-    // 理論式: (cos_curr / cos_neigh) * (dist_sq_neigh / dist_sq_curr)
-    var jacobian = (cos_curr / cos_neigh) * (dist_sq_neigh / dist_sq_curr);
+    // Radiance is invariant along the ray (in vacuum), so we only account for the cosine terms
+    // at the integration surfaces (geometry term ratio without distance).
+    var jacobian = cos_curr / cos_neigh;
 
     // ★重要: 境界が光る問題への対策1 (Clamping)
     // 幾何学的に鋭角な場所でJacobianが爆発するのを防ぐ

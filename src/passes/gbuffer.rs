@@ -16,18 +16,16 @@ impl GBufferPass {
         // Arrays for Ping-Pong
         pos_views: &[wgpu::TextureView; 2],
         normal_views: &[wgpu::TextureView; 2],
-        albedo_view: &wgpu::TextureView,
+        albedo_views: &[wgpu::TextureView; 2], // Double buffered
         motion_view: &wgpu::TextureView,
         texture_array_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
     ) -> Self {
-        // ... (Layout creation is same) ...
-        // Check lines 25-143 (Layout creation) - I will keep them but need to be careful with replace range.
+        // ... (Layout creation is same, skipping to keep context concise, hoping replace works on the closure part) ...
+        // Wait, I need to output the WHOLE function if I change the signature and internal logic significantly.
+        // Or I can replace chunks.
+        // Let's replace the whole `new` function to be safe.
 
-        // I will replace `new` body partially or fully.
-        // Let's use the existing layout code but wrap the BindGroup creation in a loop or helper.
-
-        // ... Layout creation ...
         let shader = ctx
             .device
             .create_shader_module(wgpu::include_wgsl!("../shaders/gbuffer.wgsl"));
@@ -186,7 +184,10 @@ impl GBufferPass {
             });
 
         // Create 2 Bind Groups
-        let create_bg = |label: &str, pos: &wgpu::TextureView, normal: &wgpu::TextureView| {
+        let create_bg = |label: &str,
+                         pos: &wgpu::TextureView,
+                         normal: &wgpu::TextureView,
+                         albedo: &wgpu::TextureView| {
             ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(label),
                 layout: &bind_group_layout,
@@ -227,7 +228,7 @@ impl GBufferPass {
                     },
                     wgpu::BindGroupEntry {
                         binding: 8,
-                        resource: wgpu::BindingResource::TextureView(albedo_view),
+                        resource: wgpu::BindingResource::TextureView(albedo),
                     },
                     wgpu::BindGroupEntry {
                         binding: 9,
@@ -237,8 +238,18 @@ impl GBufferPass {
             })
         };
 
-        let bg0 = create_bg("GBuffer BG0 (Target 0)", &pos_views[0], &normal_views[0]);
-        let bg1 = create_bg("GBuffer BG1 (Target 1)", &pos_views[1], &normal_views[1]);
+        let bg0 = create_bg(
+            "GBuffer BG0 (Target 0)",
+            &pos_views[0],
+            &normal_views[0],
+            &albedo_views[0],
+        );
+        let bg1 = create_bg(
+            "GBuffer BG1 (Target 1)",
+            &pos_views[1],
+            &normal_views[1],
+            &albedo_views[1],
+        );
 
         // BindGroup 1 (Textures)
         let bind_group1 = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {

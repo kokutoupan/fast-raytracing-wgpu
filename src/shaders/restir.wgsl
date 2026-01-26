@@ -108,8 +108,14 @@ struct PathResult {
 
 @group(0) @binding(12) var prev_gbuffer_pos: texture_2d<f32>;
 @group(0) @binding(13) var prev_gbuffer_normal: texture_2d<f32>;
+@group(0) @binding(14) var prev_gbuffer_albedo: texture_2d<f32>;
 
-// Group 1: Textures
+// ... (existing code) ...
+
+
+
+// ... (inside main) ...
+
 @group(1) @binding(0) var tex_sampler: sampler;
 @group(1) @binding(1) var textures: texture_2d_array<f32>;
 
@@ -232,73 +238,71 @@ fn sample_light(light_idx: u32) -> LightSample {
 }
 
 // --- BSDF Evaluation ---
-fn eval_pdf(normal: vec3f, wi: vec3f, wo: vec3f, mat: Material) -> f32 {
+// --- BSDF Evaluation ---
+fn eval_pdf(normal: vec3f, wi: vec3f, wo: vec3f, mat: Material, base_color: vec3f) -> f32 {
     let n_dot_l = dot(normal, wi);
     let n_dot_v = dot(normal, wo);
 
-    if mat.metallic > 0.01 {
-        if n_dot_l <= 0.0 || n_dot_v <= 0.0 { return 0.0; }
-        let h = normalize(wi + wo);
-        let n_dot_h = max(dot(normal, h), 0.0);
-        let d = ndf_ggx(n_dot_h, mat.roughness);
-        let k = (mat.roughness * mat.roughness) / 2.0;
-        let g1 = geometry_schlick_ggx(n_dot_v, k);
-        return (d * g1) / (4.0 * n_dot_v);
-    }
-    if mat.ior > 1.01 || mat.ior < 0.99 { return 0.0; } // Delta
-    return max(n_dot_l, 0.0) / PI;
+    // Glass (Delta)
+    if mat.ior > 1.01 || mat.ior < 0.99 { return 0.0; }
+
+    if n_dot_l <= 0.0 || n_dot_v <= 0.0 { return 0.0; }
+
+    // Unified PBR
+    let F0 = mix(vec3f(0.04), base_color, mat.metallic);
+    let F = fresnel_schlick(F0, max(dot(normal, wo), 0.0));
+    let lum_spec = luminance(F);
+    let lum_diff = luminance(base_color * (1.0 - mat.metallic));
+    let prob_spec = clamp(lum_spec / (lum_spec + lum_diff + 0.001), 0.05, 0.95);
+
+    // Specular PDF
+    let h = normalize(wi + wo);
+    let n_dot_h = max(dot(normal, h), 0.0);
+    let d = ndf_ggx(n_dot_h, mat.roughness);
+    let k = (mat.roughness * mat.roughness) / 2.0;
+    let g1 = geometry_schlick_ggx(n_dot_v, k);
+    let pdf_spec = (d * g1) / (4.0 * n_dot_v);
+
+    // Diffuse PDF
+    let pdf_diff = max(n_dot_l, 0.0) / PI;
+
+    return prob_spec * pdf_spec + (1.0 - prob_spec) * pdf_diff;
 }
 
 fn eval_bsdf(normal: vec3f, wi: vec3f, wo: vec3f, mat: Material, base_color: vec3f) -> vec3f {
     let n_dot_l = dot(normal, wi);
     let n_dot_v = dot(normal, wo);
 
-    if mat.metallic > 0.01 {
-        if n_dot_l <= 0.0 || n_dot_v <= 0.0 { return vec3f(0.0); }
-        let h = normalize(wi + wo);
-        let n_dot_h = max(dot(normal, h), 0.0);
-        let h_dot_v = max(dot(h, wo), 0.0);
-        let D = ndf_ggx(n_dot_h, mat.roughness);
-        let G = geometry_smith(n_dot_l, n_dot_v, mat.roughness);
-        let F = fresnel_schlick(base_color, h_dot_v);
-        let numerator = D * G * F;
-        let denominator = 4.0 * n_dot_l * n_dot_v;
-        return numerator / max(denominator, 0.001);
-    }
+    // Glass (Delta)
     if mat.ior > 1.01 || mat.ior < 0.99 { return vec3f(0.0); }
-    return base_color / PI;
+
+    if n_dot_l <= 0.0 || n_dot_v <= 0.0 { return vec3f(0.0); }
+
+    // Constants
+    let h = normalize(wi + wo);
+    let n_dot_h = max(dot(normal, h), 0.0);
+    let h_dot_v = max(dot(h, wo), 0.0);
+    let F0 = mix(vec3f(0.04), base_color, mat.metallic);
+
+    // Specular Term (GGX)
+    let D = ndf_ggx(n_dot_h, mat.roughness);
+    let G = geometry_smith(n_dot_l, n_dot_v, mat.roughness);
+    let F = fresnel_schlick(F0, h_dot_v);
+    let specular = (D * G * F) / max(4.0 * n_dot_l * n_dot_v, 0.001);
+
+    // Diffuse Term (Lambert)
+    // Metallic surfaces have no diffuse contribution
+    let kD = (vec3f(1.0) - F) * (1.0 - mat.metallic);
+    let diffuse = kD * base_color / PI;
+
+    return diffuse + specular;
 }
 
 fn sample_bsdf(wo: vec3f, hit: HitInfo, mat: Material, base_color: vec3f) -> BsdfSample {
     var smp: BsdfSample;
     smp.is_delta = false;
 
-    if mat.metallic > 0.01 {
-        let tbn = make_orthonormal_basis(hit.ffnormal);
-        let wo_local = transpose(tbn) * wo;
-        let r_uv = vec2f(rand(), rand());
-        let wm_local = sample_ggx_vndf(wo_local, mat.roughness, r_uv);
-        let wm = tbn * wm_local;
-        smp.wi = reflect(-wo, wm);
-
-        let n_dot_l = dot(hit.ffnormal, smp.wi);
-        let n_dot_v = dot(hit.ffnormal, wo);
-
-        if n_dot_l <= 0.0 || n_dot_v <= 0.0 {
-            smp.weight = vec3f(0.0);
-            smp.pdf = 0.0;
-            return smp;
-        }
-
-        smp.pdf = eval_pdf(hit.ffnormal, smp.wi, wo, mat);
-        let F = fresnel_schlick(base_color, dot(wo, wm));
-        let k = (mat.roughness * mat.roughness) / 2.0;
-        let G1_l = geometry_schlick_ggx(n_dot_l, k);
-        smp.weight = F * G1_l;
-        return smp;
-    }
-    
-    // Glass
+    // Glass (Delta) - Remains separate
     if mat.ior > 1.01 || mat.ior < 0.99 {
         smp.is_delta = true;
         smp.pdf = 0.0;
@@ -314,11 +318,49 @@ fn sample_bsdf(wo: vec3f, hit: HitInfo, mat: Material, base_color: vec3f) -> Bsd
         return smp;
     }
 
-    // Lambert
-    smp.wi = normalize(hit.ffnormal + random_unit_vector());
-    let n_dot_l = max(dot(hit.ffnormal, smp.wi), 0.0);
-    smp.pdf = n_dot_l / PI;
-    if smp.pdf > 0.0 { smp.weight = base_color; } else { smp.weight = vec3f(0.0); }
+    // Unified PBR Stochastic Sampling
+    let F0 = mix(vec3f(0.04), base_color, mat.metallic);
+    let F_view = fresnel_schlick(F0, max(dot(hit.ffnormal, wo), 0.0));
+    
+    // Calculate selection probability based on estimated luminance contribution
+    let lum_spec = luminance(F_view);
+    let lum_diff = luminance(base_color * (1.0 - mat.metallic));
+    let prob_spec = clamp(lum_spec / (lum_spec + lum_diff + 0.001), 0.05, 0.95);
+
+    let rnd = rand();
+    if rnd < prob_spec {
+        // Sample Specular (GGX)
+        let tbn = make_orthonormal_basis(hit.ffnormal);
+        let wo_local = transpose(tbn) * wo;
+        let r_uv = vec2f(rand(), rand());
+        let wm_local = sample_ggx_vndf(wo_local, mat.roughness, r_uv);
+        let wm = tbn * wm_local;
+        smp.wi = reflect(-wo, wm);
+    } else {
+        // Sample Diffuse (Lambert)
+        smp.wi = normalize(hit.ffnormal + random_unit_vector());
+    }
+
+    let n_dot_l = dot(hit.ffnormal, smp.wi);
+    let n_dot_v = dot(hit.ffnormal, wo);
+
+    if n_dot_l <= 0.0 || n_dot_v <= 0.0 {
+        smp.weight = vec3f(0.0);
+        smp.pdf = 0.0;
+        return smp;
+    }
+
+    // Evaluate full BSDF and PDF for the chosen direction
+    // Note: We need to pass base_color locally here, so eval_bsdf call is cleaner
+    let bsdf_val = eval_bsdf(hit.ffnormal, smp.wi, wo, mat, base_color);
+    smp.pdf = eval_pdf(hit.ffnormal, smp.wi, wo, mat, base_color);
+
+    if smp.pdf > 0.0 {
+        smp.weight = bsdf_val * n_dot_l / smp.pdf;
+    } else {
+        smp.weight = vec3f(0.0);
+    }
+
     return smp;
 }
 
@@ -469,7 +511,7 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
                 let ls = sample_light(light_idx);
 
                 let pdf_nee = ls.pdf * (1.0 / f32(camera.num_lights));
-                let p_bsdf = eval_pdf(hit.ffnormal, normalize(ls.pos - hit.pos), wo, mat);
+                let p_bsdf = eval_pdf(hit.ffnormal, normalize(ls.pos - hit.pos), wo, mat, base_color);
                 let mis_weight_nee = pdf_nee / (pdf_nee + p_bsdf);
 
                 let weight = mis_weight_nee / pdf_nee;
@@ -575,7 +617,7 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
                     let ls = sample_light(light_idx);
 
                     let pdf_nee = ls.pdf * (1.0 / f32(camera.num_lights));
-                    let p_bsdf = eval_pdf(hit.ffnormal, normalize(ls.pos - hit.pos), wo, mat);
+                    let p_bsdf = eval_pdf(hit.ffnormal, normalize(ls.pos - hit.pos), wo, mat, base_color);
                     let mis_weight_nee = pdf_nee / (pdf_nee + p_bsdf);
 
                     let weight = mis_weight_nee / pdf_nee;
@@ -735,23 +777,21 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         ) {
             var prev_r = prev_reservoirs[prev_pixel_idx];
             
-            // ★重要: Replay (再評価) ★
-            let prev_replay_path_result = trace_path(coord, prev_r.y);
-            let p_hat_prev = luminance(prev_replay_path_result.radiance);
+            // ALBEDO CORRECTION (No Replay)
+            let curr_albedo = textureLoad(gbuffer_albedo, coord, 0).rgb;
+            let prev_albedo = textureLoad(prev_gbuffer_albedo, prev_id_xy, 0).rgb;
+            let l_curr = luminance(curr_albedo) + 0.001;
+            let l_prev = luminance(prev_albedo) + 0.001;
+            let albedo_ratio = l_curr / l_prev;
 
-            // 明るさが0でない有効なパスならマージ
-            if p_hat_prev > 0.0 {
-                // 履歴の長さを制限 (ゴースト低減)
-                // Note: We clamp prev_r.M locally before merging
+            // Use stored p_hat corrected by albedo change
+            let p_hat_new = prev_r.p_hat * albedo_ratio;
+
+            if p_hat_new > 0.0 {
                 let clamped_M = min(prev_r.M, MAX_RESERVOIR_M_TEMPORAL);
+                let w_prev = p_hat_new * prev_r.W * f32(clamped_M);
 
-                // RIS Weight計算: p_hat * W * M
-                // We use M of the neighbor (clamped)
-                let w_prev = p_hat_prev * prev_r.W * f32(clamped_M);
-
-                // マージ実行 (Accumulate neighbor M)
-                // update_reservoir will add 'clamped_M' to current M.
-                update_reservoir(&r, prev_r.y, w_prev, rand_lcg(&local_seed), clamped_M, p_hat_prev, prev_replay_path_result.v1_pos);
+                update_reservoir(&r, prev_r.y, w_prev, rand_lcg(&local_seed), clamped_M, p_hat_new, prev_r.s_path);
             }
         }
     }

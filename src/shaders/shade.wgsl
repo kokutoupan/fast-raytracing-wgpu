@@ -223,80 +223,83 @@ fn sample_light(light_idx: u32) -> LightSample {
 }
 
 // --- BSDF Evaluation ---
-fn eval_pdf(normal: vec3f, wi: vec3f, wo: vec3f, mat: Material) -> f32 {
+// --- BSDF Evaluation ---
+
+fn luminance(c: vec3f) -> f32 {
+    return dot(c, vec3f(0.2126, 0.7152, 0.0722));
+}
+
+fn eval_pdf(normal: vec3f, wi: vec3f, wo: vec3f, mat: Material, base_color: vec3f) -> f32 {
     let n_dot_l = dot(normal, wi);
     let n_dot_v = dot(normal, wo);
 
-    if mat.metallic > 0.01 {
-        if n_dot_l <= 0.0 || n_dot_v <= 0.0 { return 0.0; }
-        let h = normalize(wi + wo);
-        let n_dot_h = max(dot(normal, h), 0.0);
-        let d = ndf_ggx(n_dot_h, mat.roughness);
-        let k = (mat.roughness * mat.roughness) / 2.0;
-        let g1 = geometry_schlick_ggx(n_dot_v, k);
-        return (d * g1) / (4.0 * n_dot_v);
-    }
-    if mat.ior > 1.01 || mat.ior < 0.99 { return 0.0; } // Delta
-    return max(n_dot_l, 0.0) / PI;
+    // Glass (Delta)
+    if mat.ior > 1.01 || mat.ior < 0.99 { return 0.0; }
+
+    if n_dot_l <= 0.0 || n_dot_v <= 0.0 { return 0.0; }
+
+    // Unified PBR
+    let F0 = mix(vec3f(0.04), base_color, mat.metallic);
+    let F = fresnel_schlick(F0, max(dot(normal, wo), 0.0));
+    let lum_spec = luminance(F);
+    let lum_diff = luminance(base_color * (1.0 - mat.metallic));
+    let prob_spec = clamp(lum_spec / (lum_spec + lum_diff + 0.001), 0.05, 0.95);
+
+    // Specular PDF
+    let h = normalize(wi + wo);
+    let n_dot_h = max(dot(normal, h), 0.0);
+    let d = ndf_ggx(n_dot_h, mat.roughness);
+    let k = (mat.roughness * mat.roughness) / 2.0;
+    let g1 = geometry_schlick_ggx(n_dot_v, k);
+    let pdf_spec = (d * g1) / (4.0 * n_dot_v);
+
+    // Diffuse PDF
+    let pdf_diff = max(n_dot_l, 0.0) / PI;
+
+    return prob_spec * pdf_spec + (1.0 - prob_spec) * pdf_diff;
 }
 
 fn eval_bsdf(normal: vec3f, wi: vec3f, wo: vec3f, mat: Material, base_color: vec3f) -> vec3f {
     let n_dot_l = dot(normal, wi);
     let n_dot_v = dot(normal, wo);
 
-    if mat.metallic > 0.01 {
-        if n_dot_l <= 0.0 || n_dot_v <= 0.0 { return vec3f(0.0); }
-        let h = normalize(wi + wo);
-        let n_dot_h = max(dot(normal, h), 0.0);
-        let h_dot_v = max(dot(h, wo), 0.0);
-        let D = ndf_ggx(n_dot_h, mat.roughness);
-        let G = geometry_smith(n_dot_l, n_dot_v, mat.roughness);
-        let F = fresnel_schlick(base_color, h_dot_v);
-        let numerator = D * G * F;
-        let denominator = 4.0 * n_dot_l * n_dot_v;
-        return numerator / max(denominator, 0.001);
-    }
+    // Glass (Delta)
     if mat.ior > 1.01 || mat.ior < 0.99 { return vec3f(0.0); }
-    return base_color / PI;
+
+    if n_dot_l <= 0.0 || n_dot_v <= 0.0 { return vec3f(0.0); }
+
+    // Constants
+    let h = normalize(wi + wo);
+    let n_dot_h = max(dot(normal, h), 0.0);
+    let h_dot_v = max(dot(h, wo), 0.0);
+    let F0 = mix(vec3f(0.0004), base_color, mat.metallic);
+
+    // Specular Term (GGX)
+    let D = ndf_ggx(n_dot_h, mat.roughness);
+    let G = geometry_smith(n_dot_l, n_dot_v, mat.roughness);
+    let F = fresnel_schlick(F0, h_dot_v);
+    let specular = (D * G * F) / max(4.0 * n_dot_l * n_dot_v, 0.001);
+
+    // Diffuse Term (Lambert)
+    // Metallic surfaces have no diffuse contribution
+    let kD = (vec3f(1.0) - F) * (1.0 - mat.metallic);
+    let diffuse = kD * base_color / PI;
+
+    return diffuse + specular;
 }
 
 fn sample_bsdf(wo: vec3f, hit: HitInfo, mat: Material, base_color: vec3f) -> BsdfSample {
     var smp: BsdfSample;
     smp.is_delta = false;
 
-    if mat.metallic > 0.01 {
-        let tbn = make_orthonormal_basis(hit.ffnormal);
-        let wo_local = transpose(tbn) * wo;
-        let r_uv = vec2f(rand(), rand());
-        let wm_local = sample_ggx_vndf(wo_local, mat.roughness, r_uv);
-        let wm = tbn * wm_local;
-        smp.wi = reflect(-wo, wm);
-
-        let n_dot_l = dot(hit.ffnormal, smp.wi);
-        let n_dot_v = dot(hit.ffnormal, wo);
-
-        if n_dot_l <= 0.0 || n_dot_v <= 0.0 {
-            smp.weight = vec3f(0.0);
-            smp.pdf = 0.0;
-            return smp;
-        }
-
-        smp.pdf = eval_pdf(hit.ffnormal, smp.wi, wo, mat);
-        let F = fresnel_schlick(base_color, dot(wo, wm));
-        let k = (mat.roughness * mat.roughness) / 2.0;
-        let G1_l = geometry_schlick_ggx(n_dot_l, k);
-        smp.weight = F * G1_l;
-        return smp;
-    }
-    
-    // Glass
+    // Glass (Delta) - Remains separate
     if mat.ior > 1.01 || mat.ior < 0.99 {
         smp.is_delta = true;
         smp.pdf = 0.0;
         let refraction_ratio = select(mat.ior, 1.0 / mat.ior, hit.front_face);
         let cos_theta = min(dot(wo, hit.ffnormal), 1.0);
         let sin_theta = sqrt(1.0 - cos_theta * cos_theta);
-        if refraction_ratio * sin_theta > 1.0 || reflectance(cos_theta, refraction_ratio) > rand() { // Simplified Fresnel prob
+        if refraction_ratio * sin_theta > 1.0 || reflectance(cos_theta, refraction_ratio) > rand() {
             smp.wi = reflect(-wo, hit.ffnormal);
         } else {
             smp.wi = refract(-wo, hit.ffnormal, refraction_ratio);
@@ -305,11 +308,49 @@ fn sample_bsdf(wo: vec3f, hit: HitInfo, mat: Material, base_color: vec3f) -> Bsd
         return smp;
     }
 
-    // Lambert
-    smp.wi = normalize(hit.ffnormal + random_unit_vector());
-    let n_dot_l = max(dot(hit.ffnormal, smp.wi), 0.0);
-    smp.pdf = n_dot_l / PI;
-    if smp.pdf > 0.0 { smp.weight = base_color; } else { smp.weight = vec3f(0.0); }
+    // Unified PBR Stochastic Sampling
+    let F0 = mix(vec3f(0.04), base_color, mat.metallic);
+    let F_view = fresnel_schlick(F0, max(dot(hit.ffnormal, wo), 0.0));
+    
+    // Calculate selection probability based on estimated luminance contribution
+    let lum_spec = luminance(F_view);
+    let lum_diff = luminance(base_color * (1.0 - mat.metallic));
+    let prob_spec = clamp(lum_spec / (lum_spec + lum_diff + 0.001), 0.05, 0.95);
+
+    let rnd = rand();
+    if rnd < prob_spec {
+        // Sample Specular (GGX)
+        let tbn = make_orthonormal_basis(hit.ffnormal);
+        let wo_local = transpose(tbn) * wo;
+        let r_uv = vec2f(rand(), rand());
+        let wm_local = sample_ggx_vndf(wo_local, mat.roughness, r_uv);
+        let wm = tbn * wm_local;
+        smp.wi = reflect(-wo, wm);
+    } else {
+        // Sample Diffuse (Lambert)
+        smp.wi = normalize(hit.ffnormal + random_unit_vector());
+    }
+
+    let n_dot_l = dot(hit.ffnormal, smp.wi);
+    let n_dot_v = dot(hit.ffnormal, wo);
+
+    if n_dot_l <= 0.0 || n_dot_v <= 0.0 {
+        smp.weight = vec3f(0.0);
+        smp.pdf = 0.0;
+        return smp;
+    }
+
+    // Evaluate full BSDF and PDF for the chosen direction
+    // Note: We need to pass base_color locally here, so eval_bsdf call is cleaner
+    let bsdf_val = eval_bsdf(hit.ffnormal, smp.wi, wo, mat, base_color);
+    smp.pdf = eval_pdf(hit.ffnormal, smp.wi, wo, mat, base_color);
+
+    if smp.pdf > 0.0 {
+        smp.weight = bsdf_val * n_dot_l / smp.pdf;
+    } else {
+        smp.weight = vec3f(0.0);
+    }
+
     return smp;
 }
 
@@ -457,7 +498,7 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> vec3f {
                 let ls = sample_light(light_idx);
 
                 let pdf_nee = ls.pdf * (1.0 / f32(camera.num_lights));
-                let p_bsdf = eval_pdf(hit.ffnormal, normalize(ls.pos - hit.pos), wo, mat);
+                let p_bsdf = eval_pdf(hit.ffnormal, normalize(ls.pos - hit.pos), wo, mat, base_color);
                 let mis_weight_nee = pdf_nee / (pdf_nee + p_bsdf);
 
                 let weight = mis_weight_nee / pdf_nee;
@@ -556,7 +597,7 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> vec3f {
                     let ls = sample_light(light_idx);
 
                     let pdf_nee = ls.pdf * (1.0 / f32(camera.num_lights));
-                    let p_bsdf = eval_pdf(hit.ffnormal, normalize(ls.pos - hit.pos), wo, mat);
+                    let p_bsdf = eval_pdf(hit.ffnormal, normalize(ls.pos - hit.pos), wo, mat, base_color);
                     let mis_weight_nee = pdf_nee / (pdf_nee + p_bsdf);
 
                     // We need to pass the weight such that `eval_direct_lighting` result = Contribution

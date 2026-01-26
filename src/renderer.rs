@@ -32,8 +32,8 @@ pub struct RenderTargets {
     // --- G-Buffer Textures ---
     pub gbuffer_pos: [wgpu::Texture; 2],
     pub gbuffer_normal: [wgpu::Texture; 2],
-    pub gbuffer_albedo: wgpu::Texture, // Albedo (rgb) + Metallic/MatID (w)
-    pub gbuffer_motion: wgpu::Texture, // Motion Vector (xy)
+    pub gbuffer_albedo: [wgpu::Texture; 2], // Double buffered
+    pub gbuffer_motion: wgpu::Texture,      // Motion Vector (xy)
 
     // Views (convenience)
     pub raw_view: wgpu::TextureView,
@@ -42,7 +42,7 @@ pub struct RenderTargets {
     // Views (Binding用)
     pub gbuffer_pos_view: [wgpu::TextureView; 2],
     pub gbuffer_normal_view: [wgpu::TextureView; 2],
-    pub gbuffer_albedo_view: wgpu::TextureView,
+    pub gbuffer_albedo_view: [wgpu::TextureView; 2],
     pub gbuffer_motion_view: wgpu::TextureView,
 }
 
@@ -121,7 +121,10 @@ impl RenderTargets {
             create_storage_tex("GBuffer Normal 0", wgpu::TextureFormat::Rg32Float),
             create_storage_tex("GBuffer Normal 1", wgpu::TextureFormat::Rg32Float),
         ];
-        let gbuffer_albedo = create_storage_tex("GBuffer Albedo", wgpu::TextureFormat::Rgba8Unorm);
+        let gbuffer_albedo = [
+            create_storage_tex("GBuffer Albedo 0", wgpu::TextureFormat::Rgba8Unorm),
+            create_storage_tex("GBuffer Albedo 1", wgpu::TextureFormat::Rgba8Unorm),
+        ];
         let gbuffer_motion = create_storage_tex("GBuffer Motion", wgpu::TextureFormat::Rg32Float);
 
         // Views
@@ -133,7 +136,10 @@ impl RenderTargets {
             gbuffer_normal[0].create_view(&Default::default()),
             gbuffer_normal[1].create_view(&Default::default()),
         ];
-        let gbuffer_albedo_view = gbuffer_albedo.create_view(&Default::default());
+        let gbuffer_albedo_view = [
+            gbuffer_albedo[0].create_view(&Default::default()),
+            gbuffer_albedo[1].create_view(&Default::default()),
+        ];
         let gbuffer_motion_view = gbuffer_motion.create_view(&Default::default());
 
         let pp_view = post_processed_texture.create_view(&Default::default());
@@ -229,7 +235,8 @@ impl Renderer {
             address_mode_w: wgpu::AddressMode::Repeat,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            anisotropy_clamp: 16,
             ..Default::default()
         });
 
@@ -350,6 +357,7 @@ impl Renderer {
             &post_params_buffer,
             &targets.gbuffer_normal_view,
             &targets.gbuffer_pos_view,
+            &targets.gbuffer_motion_view, // New
         );
 
         let blit_pass = BlitPass::new(ctx, &targets.pp_view, &sampler, &blit_params_buffer);
@@ -520,9 +528,10 @@ impl Renderer {
             );
         } else {
             // Visualize Albedo (Unorm) -> Skip PostPass
+            let idx = (self.frame_count % 2) as usize;
             encoder.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
-                    texture: &self.targets.gbuffer_albedo,
+                    texture: &self.targets.gbuffer_albedo[idx], // Fix: double buffer
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,

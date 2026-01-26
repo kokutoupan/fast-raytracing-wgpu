@@ -3,6 +3,8 @@
 @group(0) @binding(2) var out_tex: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(3) var normal_tex: texture_2d<f32>;
 @group(0) @binding(4) var pos_tex: texture_2d<f32>;
+@group(0) @binding(6) var motion_tex: texture_2d<f32>; // New Binding
+
 
 struct PostParams {
     width: u32,
@@ -13,6 +15,9 @@ struct PostParams {
 @group(0) @binding(5) var<uniform> params: PostParams;
 
 fn gauss(x: f32, sigma: f32) -> f32 {
+    if sigma < 0.001 {
+        return select(0.0, 1.0, abs(x) < 0.001);
+    }
     return exp(-(x * x) / (2.0 * sigma * sigma));
 }
 
@@ -42,7 +47,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     var sum_weight = 0.0;
 
     // Bilateral Filter Parameters
-    let sigma_spatial = 2.0;
+    let sigma_spatial = 1.5;
     let sigma_color = 0.5;
     let sigma_normal = 0.1;
     let sigma_pos = 0.1;
@@ -91,19 +96,66 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         filtered_color = sum_color / sum_weight;
     }
 
-    // Accumulation logic
-    var current_acc = vec4f(0.0);
+    // --- TAA (Reprojection) ---
+    // Calculate Mean/Min/Max of 3x3 neighborhood for clamping
+    var c_min = vec3f(1.0e20);
+    var c_max = vec3f(-1.0e20);
+    var c_avg = vec3f(0.0);
+    var count = 0.0;
+
+    for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+            let offset = vec2i(dx, dy);
+            let s_coords = vec2i(coords) + offset;
+            if s_coords.x >= 0 && s_coords.y >= 0 && s_coords.x < i32(params.width) && s_coords.y < i32(params.height) {
+                let s_col = textureLoad(raw_tex, s_coords, 0).rgb;
+                c_min = min(c_min, s_col);
+                c_max = max(c_max, s_col);
+                c_avg += s_col;
+                count += 1.0;
+            }
+        }
+    }
+    c_avg /= count;
+
+    // Temporal Reuse
+    var history_color = filtered_color;
+    var valid_history = false;
+
     if params.frame_count > 0u {
-        current_acc = accumulation[idx];
+        let motion = textureLoad(motion_tex, coords, 0).xy;
+        let uv = (vec2f(coords) + 0.5) / vec2f(f32(params.width), f32(params.height));
+        let prev_uv = uv + motion;
+        let prev_coords = vec2i(prev_uv * vec2f(f32(params.width), f32(params.height)) - 0.5);
+
+        if prev_coords.x >= 0 && prev_coords.y >= 0 && prev_coords.x < i32(params.width) && prev_coords.y < i32(params.height) {
+            let prev_idx = u32(prev_coords.y) * params.width + u32(prev_coords.x);
+            let hist_val = accumulation[prev_idx];
+            // history stores (accumulated_color, sample_count). 
+            // We want the average color for TAA history. 
+            // Previous implementation stored SUM. 
+            // NOW we store the filtered color directly (last frame's result).
+
+            history_color = hist_val.rgb;
+            valid_history = true;
+        }
     }
 
-    let new_acc = current_acc + vec4f(filtered_color * f32(params.spp), f32(params.spp));
-    accumulation[idx] = new_acc;
+    var final_color = filtered_color;
 
-    var final_color = new_acc.rgb / new_acc.w;
+    if valid_history {
+        // Clamp History (Simple AABB)
+        let clamped_history = clamp(history_color, c_min, c_max);
+
+        let blend_factor = 0.9; // 90% history, 10% new
+        final_color = mix(final_color, clamped_history, blend_factor);
+    }
     
-    // Gamma correction (Manual)
-    final_color = pow(final_color, vec3f(1.0 / 2.2));
+    // Store result in accumulation buffer for next frame
+    accumulation[idx] = vec4f(final_color, 1.0);
 
-    textureStore(out_tex, vec2i(coords), vec4f(final_color, 1.0));
+    // Gamma correction (Manual)
+    let display_color = pow(final_color, vec3f(1.0 / 2.2));
+
+    textureStore(out_tex, vec2i(coords), vec4f(display_color, 1.0));
 }

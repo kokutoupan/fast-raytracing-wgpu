@@ -51,7 +51,7 @@ impl RestirPass {
         camera_buffer: &wgpu::Buffer,
         gbuffer_pos: &[wgpu::TextureView; 2],
         gbuffer_normal: &[wgpu::TextureView; 2],
-        gbuffer_albedo: &wgpu::TextureView,
+        gbuffer_albedo: &[wgpu::TextureView; 2], // Double Buffered
         gbuffer_motion: &wgpu::TextureView,
         render_width: u32,
         render_height: u32,
@@ -88,7 +88,7 @@ impl RestirPass {
                         },
                         count: None,
                     },
-                    // 2: Albedo
+                    // 2: Albedo (Current)
                     wgpu::BindGroupLayoutEntry {
                         binding: 2,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -210,6 +210,17 @@ impl RestirPass {
                     // 13: Prev Normal
                     wgpu::BindGroupLayoutEntry {
                         binding: 13,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    // 14: Prev Albedo (New)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 14,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Texture {
                             sample_type: wgpu::TextureSampleType::Float { filterable: false },
@@ -350,12 +361,15 @@ impl RestirPass {
             ],
         });
 
-        // Bind Group 0 Ping-Pong (G-Buffer) - Same as before
+        // Bind Group 0 Ping-Pong (G-Buffer)
         let create_bg0 = |label: &str,
                           curr_pos: &wgpu::TextureView,
                           curr_normal: &wgpu::TextureView,
+                          curr_albedo: &wgpu::TextureView, // New
                           prev_pos: &wgpu::TextureView,
-                          prev_normal: &wgpu::TextureView| {
+                          prev_normal: &wgpu::TextureView,
+                          prev_albedo: &wgpu::TextureView| {
+            // New
             ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(label),
                 layout: &bgl0,
@@ -370,7 +384,7 @@ impl RestirPass {
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: wgpu::BindingResource::TextureView(gbuffer_albedo),
+                        resource: wgpu::BindingResource::TextureView(curr_albedo), // Current Albedo
                     },
                     wgpu::BindGroupEntry {
                         binding: 3,
@@ -418,6 +432,10 @@ impl RestirPass {
                         binding: 13,
                         resource: wgpu::BindingResource::TextureView(prev_normal),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 14,
+                        resource: wgpu::BindingResource::TextureView(prev_albedo), // Previous Albedo
+                    },
                 ],
             })
         };
@@ -428,8 +446,10 @@ impl RestirPass {
             "Restir BG0 (Curr=0)",
             &gbuffer_pos[0],
             &gbuffer_normal[0],
+            &gbuffer_albedo[0], // Curr Albedo
             &gbuffer_pos[1],
             &gbuffer_normal[1],
+            &gbuffer_albedo[1], // Prev Albedo
         );
 
         // Frame 1 logic: Write to Gbuffer 1.
@@ -438,8 +458,10 @@ impl RestirPass {
             "Restir BG0 (Curr=1)",
             &gbuffer_pos[1],
             &gbuffer_normal[1],
+            &gbuffer_albedo[1], // Curr Albedo
             &gbuffer_pos[0],
             &gbuffer_normal[0],
+            &gbuffer_albedo[0], // Prev Albedo
         );
 
         Self {

@@ -50,7 +50,7 @@ impl RestirSpatialPass {
         camera_buffer: &wgpu::Buffer,
         gbuffer_pos: &[wgpu::TextureView; 2],
         gbuffer_normal: &[wgpu::TextureView; 2],
-        gbuffer_albedo: &wgpu::TextureView,
+        gbuffer_albedo: &[wgpu::TextureView; 2], // Double Buffered
         gbuffer_motion: &wgpu::TextureView,
         reservoirs_temporal: &wgpu::Buffer,      // Read (Input)
         reservoirs_spatial: &wgpu::Buffer,       // Write (Output)
@@ -343,6 +343,7 @@ impl RestirSpatialPass {
         let create_bg0 = |label: &str,
                           curr_pos: &wgpu::TextureView,
                           curr_normal: &wgpu::TextureView,
+                          curr_albedo: &wgpu::TextureView, // NEW
                           prev_pos: &wgpu::TextureView,
                           prev_normal: &wgpu::TextureView| {
             ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -359,7 +360,7 @@ impl RestirSpatialPass {
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: wgpu::BindingResource::TextureView(gbuffer_albedo),
+                        resource: wgpu::BindingResource::TextureView(curr_albedo), // Bind
                     },
                     wgpu::BindGroupEntry {
                         binding: 3,
@@ -421,6 +422,7 @@ impl RestirSpatialPass {
             "Restir Spatial BG0 (Curr=0)",
             &gbuffer_pos[0],
             &gbuffer_normal[0],
+            &gbuffer_albedo[0], // NEW
             &gbuffer_pos[1],
             &gbuffer_normal[1],
         );
@@ -431,6 +433,7 @@ impl RestirSpatialPass {
             "Restir Spatial BG0 (Curr=1)",
             &gbuffer_pos[1],
             &gbuffer_normal[1],
+            &gbuffer_albedo[1], // NEW
             &gbuffer_pos[0],
             &gbuffer_normal[0],
         );

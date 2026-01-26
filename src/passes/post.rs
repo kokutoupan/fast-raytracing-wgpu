@@ -14,6 +14,7 @@ impl PostPass {
         params_buffer: &wgpu::Buffer,
         gbuffer_normal_views: &[wgpu::TextureView; 2],
         gbuffer_pos_views: &[wgpu::TextureView; 2],
+        gbuffer_motion: &wgpu::TextureView, // New
     ) -> Self {
         let shader = ctx
             .device
@@ -86,6 +87,17 @@ impl PostPass {
                         },
                         count: None,
                     },
+                    // Binding 6: Motion (New)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -134,6 +146,10 @@ impl PostPass {
                     wgpu::BindGroupEntry {
                         binding: 5,
                         resource: params_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: wgpu::BindingResource::TextureView(gbuffer_motion),
                     },
                 ],
             })

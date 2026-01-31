@@ -39,7 +39,7 @@ struct Material {
     light_index: i32,
     _p0: u32,
     _p1: u32,
-    _p2: u32,
+    transmission: f32,
     roughness: f32,
     metallic: f32,
     ior: f32,
@@ -246,7 +246,7 @@ fn eval_pdf(normal: vec3f, wi: vec3f, wo: vec3f, mat: Material, base_color: vec3
     let n_dot_v = dot(normal, wo);
 
     // Glass (Delta)
-    if mat.ior > 1.01 || mat.ior < 0.99 { return 0.0; }
+    if mat.transmission > 0.01 { return 0.0; }
 
     if n_dot_l <= 0.0 || n_dot_v <= 0.0 { return 0.0; }
 
@@ -275,7 +275,7 @@ fn eval_bsdf(normal: vec3f, wi: vec3f, wo: vec3f, mat: Material, base_color: vec
     let n_dot_v = dot(normal, wo);
 
     // Glass (Delta)
-    if mat.ior > 1.01 || mat.ior < 0.99 { return vec3f(0.0); }
+    if mat.transmission > 0.01 { return vec3f(0.0); }
 
     if n_dot_l <= 0.0 || n_dot_v <= 0.0 { return vec3f(0.0); }
 
@@ -304,7 +304,7 @@ fn sample_bsdf(wo: vec3f, hit: HitInfo, mat: Material, base_color: vec3f) -> Bsd
     smp.is_delta = false;
 
     // Glass (Delta) - Remains separate
-    if mat.ior > 1.01 || mat.ior < 0.99 {
+    if mat.transmission > 0.01 {
         smp.is_delta = true;
         smp.pdf = 0.0;
         let refraction_ratio = select(mat.ior, 1.0 / mat.ior, hit.front_face);
@@ -493,7 +493,7 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
     if mat_id < arrayLength(&materials) {
         let mat_static = materials[mat_id];
         mat = mat_static;
-        if abs(mat.ior - 1.0) < 0.01 {
+        if mat.transmission < 0.01 {
             mat.base_color = vec4f(albedo_raw.rgb, 1.0);
         }
     } else {
@@ -524,7 +524,7 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
         return result;
     }
 
-    let is_glass = (mat.ior > 1.01 || mat.ior < 0.99);
+    let is_glass = (mat.transmission > 0.01);
     let is_smooth_metal = (mat.metallic > 0.01) && (mat.roughness < 0.05);
     let is_specular = is_glass || is_smooth_metal;
     if !is_specular {
@@ -632,7 +632,7 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
         }
 
         // 2. NEE (Standard Random Light)
-        let is_glass_bounce = (mat.ior > 1.01 || mat.ior < 0.99);
+        let is_glass_bounce = (mat.transmission > 0.01);
         let is_smooth_metal_bounce = (mat.metallic > 0.01) && (mat.roughness < 0.05);
         let is_specular_bounce = is_glass_bounce || is_smooth_metal_bounce;
         if !is_specular_bounce {
@@ -696,7 +696,7 @@ fn is_valid_neighbor(
     if curr_mat_id != prev_mat_id { return false; }
 
     let mat = materials[curr_mat_id];
-    let is_specular = mat.roughness < 0.2 || mat.metallic > 0.8 || (mat.ior > 1.01 || mat.ior < 0.99);
+    let is_specular = mat.roughness < 0.2 || mat.metallic > 0.8 || (mat.transmission > 0.01);
 
     if is_specular {
         // 鏡面・ガラスの場合は、法線の不一致にめちゃくちゃ厳しくする（例: 3度以内）

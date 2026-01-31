@@ -4,7 +4,8 @@
 pub struct Material {
     pub base_color: [f32; 4], // 16 bytes
     pub light_index: i32,     // 4 bytes
-    pub _pad0: [u32; 3],      // 12 bytes
+    pub _pad0: [u32; 2],      // 8 bytes (reduced from 3)
+    pub transmission: f32,    // 4 bytes (New)
 
     // --- PBR Parameters (4 bytes each) ---
     pub roughness: f32,
@@ -18,7 +19,8 @@ impl Material {
         Self {
             base_color,
             light_index: -1,
-            _pad0: [0; 3],
+            _pad0: [0; 2],
+            transmission: 0.0,
             roughness: 0.5,
             metallic: 0.0,
             ior: 1.0,
@@ -46,6 +48,12 @@ impl Material {
         self.metallic = 0.0;
         self.roughness = 0.0;
         self.ior = ior;
+        self.transmission = 1.0;
+        self
+    }
+
+    pub fn transmission(mut self, transmission: f32) -> Self {
+        self.transmission = transmission;
         self
     }
 

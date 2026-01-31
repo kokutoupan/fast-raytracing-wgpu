@@ -16,7 +16,7 @@ struct Material {
     light_index: i32,
     _p0: u32,
     _p1: u32,
-    _p2: u32, // Padding
+    transmission: f32,
     roughness: f32,
     metallic: f32,
     ior: f32,

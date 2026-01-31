@@ -240,7 +240,6 @@ fn sample_light(light_idx: u32) -> LightSample {
 }
 
 // --- BSDF Evaluation ---
-// --- BSDF Evaluation ---
 fn eval_pdf(normal: vec3f, wi: vec3f, wo: vec3f, mat: Material, base_color: vec3f) -> f32 {
     let n_dot_l = dot(normal, wi);
     let n_dot_v = dot(normal, wo);
@@ -810,7 +809,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     var radius = 10.0; // ピクセル半径 (ノイズの状況に合わせて調整)
 
     let mat = materials[mat_id];
-    if mat.roughness < 0.1 || mat.metallic > 0.9 || mat.ior > 1.01 || mat.ior < 0.99 {
+    if mat.roughness < 0.1 || mat.metallic > 0.9 || mat.transmission > 0.1 {
         num_neighbors = 0u;
         // num_neighbors = 2u;
         radius = 2.0; // かなりの近傍のみ探索する
@@ -861,7 +860,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
         // 鏡面素材の場合の追加対策
         let mat = materials[mat_id];
-        let is_specular = mat.roughness < 0.1 || mat.metallic > 0.9 || (mat.ior > 1.01 || mat.ior < 0.99);
+        let is_specular = mat.roughness < 0.1 || mat.metallic > 0.9 || mat.transmission > 0.1;
 
         if is_specular {
             // 対策: Jacobianが極端に小さい/大きい場合は、接続が物理的に破綻しているとみなして捨てる

@@ -16,7 +16,7 @@ pub struct Geometry {
     pub desc: wgpu::BlasTriangleGeometrySizeDescriptor,
 }
 
-fn build_blas(
+pub fn build_blas(
     device: &wgpu::Device,
     label: &str,
     positions: Vec<[f32; 4]>,
@@ -52,7 +52,7 @@ fn build_blas(
 }
 
 // --- Helper for Octahedral Encoding ---
-fn encode_octahedral_normal(n: [f32; 3]) -> [f32; 2] {
+pub fn encode_octahedral_normal(n: [f32; 3]) -> [f32; 2] {
     let nx = n[0];
     let ny = n[1];
     let nz = n[2];

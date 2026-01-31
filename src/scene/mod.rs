@@ -1,5 +1,6 @@
 pub mod builder;
 pub mod light;
+pub mod loader;
 pub mod material;
 pub mod resources;
 
@@ -280,4 +281,118 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     };
 
     [r + m, g + m, b + m]
+}
+
+pub fn create_avocado_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneResources {
+    let mut builder = SceneBuilder::new();
+
+    // 1. 各ジオメトリの生成
+    let plane_geo = geometry::create_plane_blas(device);
+    // ライト用のジオメトリ (Quad)
+    let light_geo = geometry::create_plane_blas(device);
+
+    let mut gltf_geos = Vec::new();
+    let mut gltf_mats = Vec::new();
+
+    // Avocado読み込み
+    match loader::load_gltf("assets/models/Avocado.glb", device) {
+        Ok((geos, mats)) => {
+            println!(
+                "Loaded Avocado.glb: {} geometries, {} materials",
+                geos.len(),
+                mats.len()
+            );
+            gltf_geos = geos;
+            gltf_mats = mats;
+        }
+        Err(e) => {
+            eprintln!("Failed to load Avocado.glb: {:?}", e);
+        }
+    }
+
+    // 2. BLAS Build (まとめて実行)
+    // Plane + Light Geometry + GLTF Geometries
+    let mut all_geos = vec![&plane_geo, &light_geo];
+    for geo in &gltf_geos {
+        all_geos.push(geo);
+    }
+    SceneBuilder::build_blases(device, queue, &all_geos);
+
+    // 3. メッシュとマテリアルの登録
+
+    // Plane
+    let plane_id = builder.add_mesh(plane_geo);
+    // Light
+    let light_mesh_id = builder.add_mesh(light_geo);
+
+    // GLTF Meshes
+    let mut gltf_mesh_ids = Vec::new();
+    for geo in gltf_geos {
+        gltf_mesh_ids.push(builder.add_mesh(geo));
+    }
+
+    // Materials
+    let mat_floor = builder.add_material(
+        Material::new([0.73, 0.73, 0.73, 1.0])
+            .roughness(0.99)
+            .texture(0),
+    );
+    // Light Material (Emissive)
+    let mat_light = builder.add_material(
+        Material::new([1.0, 1.0, 1.0, 10.0]) // High intensity color
+            .light_index(0) // Map to first light
+            .texture(0),
+    );
+
+    let mut gltf_mat_ids = Vec::new();
+    for mat in gltf_mats {
+        gltf_mat_ids.push(builder.add_material(mat));
+    }
+
+    // 4. インスタンスの配置
+    // Floor
+    builder.add_instance(
+        plane_id,
+        mat_floor,
+        Mat4::from_translation(Vec3::new(0.0, -1.0, 0.0)) * Mat4::from_scale(Vec3::splat(10.0)),
+        0x1,
+    );
+
+    // Avocado
+    for (i, &mesh_id) in gltf_mesh_ids.iter().enumerate() {
+        // マテリアルIDの対応 (単純に順序通りと仮定)
+        let mat_id = if i < gltf_mat_ids.len() {
+            gltf_mat_ids[i]
+        } else {
+            // マテリアルが不足している場合
+            0
+        };
+
+        builder.add_instance(
+            mesh_id,
+            mat_id,
+            Mat4::from_translation(Vec3::new(0.0, 0.0, 0.0)) * Mat4::from_scale(Vec3::splat(20.0)),
+            0x1,
+        );
+    }
+
+    // Light Instance
+    builder.add_instance(
+        light_mesh_id,
+        mat_light,
+        Mat4::from_translation(Vec3::new(0.0, 5.0, 0.0))
+            * Mat4::from_rotation_x(std::f32::consts::PI) // 下向き
+            * Mat4::from_scale(Vec3::splat(1.0)),
+        0x1,
+    );
+
+    // 5. 光源データ
+    builder.add_quad_light(
+        Vec3::new(0.0, 5.0, 0.0).into(),
+        [0.5, 0.0, 0.0], // 少し大きめに
+        [0.0, 0.0, 0.5],
+        [1.0, 1.0, 1.0, 10.0],
+    );
+
+    builder.build(device, queue)
 }

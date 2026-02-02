@@ -3,11 +3,47 @@ use crate::scene::Material;
 use anyhow::Result;
 use gltf::mesh::util::ReadIndices;
 
-pub fn load_gltf(path: &str, device: &wgpu::Device) -> Result<(Vec<Geometry>, Vec<Material>)> {
-    let (document, buffers, _images) = gltf::import(path)?;
+use image::{DynamicImage, ImageBuffer, Rgba};
+
+pub fn load_gltf(
+    path: &str,
+    device: &wgpu::Device,
+) -> Result<(Vec<Geometry>, Vec<Material>, Vec<DynamicImage>)> {
+    let (document, buffers, images) = gltf::import(path)?;
 
     let mut geometries = Vec::new();
     let mut materials = Vec::new();
+    let mut loaded_images = Vec::new();
+
+    // 0. Load Images
+    for image in images {
+        // Convert to DynamicImage (Rgba8)
+        let img = match image.format {
+            gltf::image::Format::R8G8B8 => {
+                let buffer = image.pixels;
+                DynamicImage::ImageRgb8(
+                    ImageBuffer::from_raw(image.width, image.height, buffer).unwrap(),
+                )
+            }
+            gltf::image::Format::R8G8B8A8 => {
+                let buffer = image.pixels;
+                DynamicImage::ImageRgba8(
+                    ImageBuffer::from_raw(image.width, image.height, buffer).unwrap(),
+                )
+            }
+            _ => {
+                println!("Unsupported image format: {:?}", image.format);
+                // Return dummy white image
+                DynamicImage::ImageRgba8(ImageBuffer::from_fn(512, 512, |_, _| {
+                    Rgba([255, 255, 255, 255])
+                }))
+            }
+        };
+
+        // Resize to 512x512 for now (to fit in our simple texture array)
+        let resized = img.resize_exact(512, 512, image::imageops::FilterType::Lanczos3);
+        loaded_images.push(resized);
+    }
 
     // 1. Load Materials
     for material in document.materials() {
@@ -16,14 +52,15 @@ pub fn load_gltf(path: &str, device: &wgpu::Device) -> Result<(Vec<Geometry>, Ve
         let metallic = pbr.metallic_factor();
         let roughness = pbr.roughness_factor();
 
-        // IOR and Transmission extension handling could be added here
-        // For now, use basic PBR
         let mut mat = Material::new(base_color)
             .metallic(metallic)
-            .roughness(roughness);
+            .roughness(roughness)
+            .texture(u32::MAX); // Default to no-texture
 
         if let Some(texture_info) = pbr.base_color_texture() {
-            mat = mat.texture(texture_info.texture().index() as u32);
+            // Need to offset index by existing textures (2: white + checker)
+            // But here we just return raw index, mapping will happen in scene builder
+            mat = mat.texture(texture_info.texture().source().index() as u32);
         }
 
         materials.push(mat);
@@ -99,5 +136,5 @@ pub fn load_gltf(path: &str, device: &wgpu::Device) -> Result<(Vec<Geometry>, Ve
         }
     }
 
-    Ok((geometries, materials))
+    Ok((geometries, materials, loaded_images))
 }

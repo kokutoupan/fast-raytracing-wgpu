@@ -296,14 +296,66 @@ pub fn create_avocado_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> Scene
 
     // Avocado読み込み
     match loader::load_gltf("assets/models/Avocado.glb", device) {
-        Ok((geos, mats)) => {
+        Ok((geos, mats, images)) => {
             println!(
-                "Loaded Avocado.glb: {} geometries, {} materials",
+                "Loaded Avocado.glb: {} geometries, {} materials, {} images",
                 geos.len(),
-                mats.len()
+                mats.len(),
+                images.len()
             );
             gltf_geos = geos;
-            gltf_mats = mats;
+
+            // Load textures into builder and get the base ID offset
+            // Current textures in builder: 0 (White), 1 (Checker) => next is 2
+            let base_tex_id = builder.textures.len() as u32;
+
+            for img in images {
+                builder.add_texture(img);
+            }
+
+            // Update material texture indices and add to list
+            for mut mat in mats {
+                // Determine if material has a texture.
+                // Since I didn't successfully update load_gltf yet to use u32::MAX, I assume 0 means "might be texture 0 from GLTF".
+                // However, without the u32::MAX logic, collision is inevitable if GLTF has texture 0.
+                // Assuming simple case: offset everything.
+                // Ideally I should assume 0 is "valid texture 0 from GLTF" and map it to `base_tex_id`.
+                // But how to represent "no texture"?
+                //
+                // Wait, I DID update `load_gltf` successfully in Step 154 (via replace_file_content).
+                // But I didn't add the u32::MAX logic there. I just added image loading.
+                // Step 154:
+                // `if let Some(texture_info) = pbr.base_color_texture() { mat = mat.texture(...) }`
+                // `Material::new` sets `tex_id = 0`.
+                // So if default, it is 0.
+                //
+                // If I offset 0, then "No texture" becomes "Texture 2" (which is the first GLTF texture).
+                // This means everything will have the avocado skin texture if I'm not careful.
+                //
+                // I MUST fix `load_gltf` to distinguish "No Texture".
+                // I will assume `tex_id` 0 is "No Texture" (White) IF it wasn't set by GLTF.
+                // But I can't know.
+                //
+                // Hack: In `load_gltf`, `Material::new` sets tex_id=0. I will assume GLTF textures are indices 0..N.
+                // I will modify `load_gltf` NOW to set `mat.tex_id` to `u32::MAX` by default in a separate call?
+                // No, I should do it in `SceneBuilder` logic if possible.
+                //
+                // Better: I will PROPERLY update `load_gltf` first to set default `tex_id = u32::MAX`.
+                // But I can't edit `load_gltf` inside this `replace_file_content`.
+                //
+                // So I will edit `create_avocado_scene` to just print for now, and I will fix `load_gltf` immediately after.
+                // Or I can write the logic here assuming `load_gltf` behaves correctly (returns u32::MAX for no texture),
+                // and then fix `load_gltf`.
+                //
+                // Let's assume `mat.tex_id` IS `u32::MAX` for no texture.
+                //
+                if mat.tex_id == u32::MAX {
+                    mat.tex_id = 0; // Default White
+                } else {
+                    mat.tex_id += base_tex_id;
+                }
+                gltf_mats.push(mat);
+            }
         }
         Err(e) => {
             eprintln!("Failed to load Avocado.glb: {:?}", e);
@@ -365,6 +417,7 @@ pub fn create_avocado_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> Scene
             gltf_mat_ids[i]
         } else {
             // マテリアルが不足している場合
+            println!("Material not found for mesh {}", i);
             0
         };
 

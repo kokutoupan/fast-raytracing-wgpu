@@ -5,6 +5,8 @@ use crate::scene::light::LightUniform;
 use glam::{Mat4, Vec3};
 use wgpu::util::DeviceExt;
 
+use image::DynamicImage;
+
 pub struct SceneBuilder {
     pub materials: Vec<Material>,
     pub attributes: Vec<VertexAttributes>,
@@ -12,12 +14,13 @@ pub struct SceneBuilder {
     pub mesh_infos: Vec<MeshInfo>,
     pub instances: Vec<Option<wgpu::TlasInstance>>,
     pub blases: Vec<wgpu::Blas>,
-    pub lights: Vec<LightUniform>, // ★追加
+    pub lights: Vec<LightUniform>,
+    pub textures: Vec<DynamicImage>, // Added
 }
 
 impl SceneBuilder {
     pub fn new() -> Self {
-        Self {
+        let mut builder = Self {
             materials: Vec::new(),
             attributes: Vec::new(),
             indices: Vec::new(),
@@ -25,7 +28,43 @@ impl SceneBuilder {
             instances: Vec::new(),
             blases: Vec::new(),
             lights: Vec::new(),
-        }
+            textures: Vec::new(),
+        };
+        // Add default textures
+        builder.add_default_textures();
+        builder
+    }
+
+    fn add_default_textures(&mut self) {
+        use image::{ImageBuffer, Rgba};
+        // 0: White
+        let white = DynamicImage::ImageRgba8(ImageBuffer::from_fn(512, 512, |_, _| {
+            Rgba([255, 255, 255, 255])
+        }));
+        self.textures.push(white);
+
+        // 1: Checker
+        let checker = DynamicImage::ImageRgba8(ImageBuffer::from_fn(512, 512, |x, y| {
+            let check = ((x / 64) + (y / 64)) % 2 == 0;
+            if check {
+                Rgba([255, 255, 255, 255])
+            } else {
+                Rgba([0, 0, 0, 255])
+            }
+        }));
+        self.textures.push(checker);
+    }
+
+    pub fn add_texture(&mut self, texture: DynamicImage) -> u32 {
+        let id = self.textures.len() as u32;
+        // Ensure RGBA8
+        let rgba = if texture.color() != image::ColorType::Rgba8 {
+            DynamicImage::ImageRgba8(texture.to_rgba8())
+        } else {
+            texture
+        };
+        self.textures.push(rgba);
+        id
     }
 
     pub fn add_material(&mut self, mat: Material) -> u32 {
@@ -192,6 +231,57 @@ impl SceneBuilder {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
+        // --- Texture Array Building ---
+        let tex_dim = 512;
+        let texture_size = wgpu::Extent3d {
+            width: tex_dim,
+            height: tex_dim,
+            depth_or_array_layers: self.textures.len() as u32,
+        };
+        let texture_array = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Scene Texture Array"),
+            size: texture_size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        for (i, img) in self.textures.iter().enumerate() {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture_array,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: 0,
+                        y: 0,
+                        z: i as u32,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                img.as_bytes(),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(tex_dim * 4),
+                    rows_per_image: Some(tex_dim),
+                },
+                wgpu::Extent3d {
+                    width: tex_dim,
+                    height: tex_dim,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+
+        let texture_view = texture_array.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("Scene Texture Array View"),
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            array_layer_count: Some(self.textures.len() as u32),
+            ..Default::default()
+        });
+
         SceneResources {
             tlas,
             global_attribute_buffer,
@@ -201,6 +291,7 @@ impl SceneBuilder {
             material_buffer,
             light_buffer,
             num_lights: self.lights.len() as u32,
+            texture_view,
         }
     }
 }

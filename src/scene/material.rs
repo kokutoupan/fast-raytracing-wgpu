@@ -14,6 +14,7 @@ pub struct Material {
     pub tex_id: u32,
 }
 
+#[allow(dead_code)]
 impl Material {
     pub fn new(base_color: [f32; 4]) -> Self {
         Self {

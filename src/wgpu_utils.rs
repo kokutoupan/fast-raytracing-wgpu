@@ -34,10 +34,12 @@ pub fn get_padded_bytes_per_row(width: u32) -> u32 {
     unpadded_bytes_per_row + padding
 }
 
+#[allow(dead_code)]
 pub fn generate_white_texture_data(dim: u32) -> Vec<u8> {
     vec![255; (dim * dim * 4) as usize]
 }
 
+#[allow(dead_code)]
 pub fn generate_checkerboard_texture_data(dim: u32, tiles: u32) -> Vec<u8> {
     let mut data = vec![0u8; (dim * dim * 4) as usize];
     let tile_size = dim / tiles;

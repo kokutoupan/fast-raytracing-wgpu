@@ -810,9 +810,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
     let mat = materials[mat_id];
     if mat.roughness < 0.1 || mat.metallic > 0.9 || mat.transmission > 0.1 {
-        num_neighbors = 0u;
-        // num_neighbors = 2u;
-        radius = 2.0; // かなりの近傍のみ探索する
+        // num_neighbors = 0u;
+        num_neighbors = 3u;
+        radius = 4.0; // かなりの近傍のみ探索する
     }
 
     for (var i = 0u; i < num_neighbors; i++) {

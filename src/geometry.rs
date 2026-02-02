@@ -16,7 +16,7 @@ pub struct Geometry {
     pub desc: wgpu::BlasTriangleGeometrySizeDescriptor,
 }
 
-pub fn build_blas(
+pub fn alloc_blas(
     device: &wgpu::Device,
     label: &str,
     positions: Vec<[f32; 4]>,
@@ -106,7 +106,7 @@ pub fn create_plane_blas(device: &wgpu::Device) -> Geometry {
     ];
     let indices: Vec<u32> = vec![0, 1, 2, 2, 1, 3]; // Triangle List
 
-    build_blas(device, "Quad BLAS", positions, attributes, indices)
+    alloc_blas(device, "Quad BLAS", positions, attributes, indices)
 }
 
 // --- ヘルパー関数: 立方体(Cube)のBLASを作成 ---
@@ -198,7 +198,7 @@ pub fn create_cube_blas(device: &wgpu::Device) -> Geometry {
         v_idx += 4;
     }
 
-    build_blas(device, "Cube BLAS", positions, attributes, indices)
+    alloc_blas(device, "Cube BLAS", positions, attributes, indices)
 }
 
 // --- ヘルパー関数: 球体(Sphere)のBLASを作成 (Icosphere) ---
@@ -283,7 +283,7 @@ pub fn create_sphere_blas(device: &wgpu::Device, subdivisions: u32) -> Geometry 
         indices.extend_from_slice(&tri);
     }
 
-    build_blas(device, "Ico Sphere BLAS", positions, attributes, indices)
+    alloc_blas(device, "Ico Sphere BLAS", positions, attributes, indices)
 }
 
 fn get_midpoint(
@@ -396,7 +396,7 @@ pub fn create_crystal_blas(device: &wgpu::Device) -> Geometry {
         add_face(bottom_tip, bottom_ring[i], bottom_ring[(i + 1) % 4]);
     }
 
-    build_blas(
+    alloc_blas(
         device,
         "Refined Crystal BLAS",
         positions,

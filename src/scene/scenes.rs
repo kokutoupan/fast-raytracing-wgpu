@@ -5,6 +5,7 @@ use super::resources::SceneResources;
 use crate::geometry;
 use glam::{Mat4, Vec3};
 
+#[allow(dead_code)]
 pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneResources {
     let mut builder = SceneBuilder::new();
 
@@ -158,6 +159,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     builder.build(device, queue)
 }
 
+#[allow(dead_code)]
 pub fn create_restir_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneResources {
     let mut builder = SceneBuilder::new();
 
@@ -255,6 +257,7 @@ pub fn create_restir_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneR
     builder.build(device, queue)
 }
 
+#[allow(dead_code)]
 fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     let c = v * s;
     let x = c * (1.0 - ((h * 6.0) % 2.0 - 1.0).abs());
@@ -277,6 +280,7 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     [r + m, g + m, b + m]
 }
 
+#[allow(dead_code)]
 pub fn create_avocado_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneResources {
     let mut builder = SceneBuilder::new();
 
@@ -438,7 +442,7 @@ pub fn create_avocado_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> Scene
         Vec3::new(0.0, 5.0, 0.0).into(),
         [0.5, 0.0, 0.0], // 少し大きめに
         [0.0, 0.0, 0.5],
-        [1.0, 1.0, 1.0, 10.0],
+        [1.0, 1.0, 1.0, 15.0],
     );
 
     builder.build(device, queue)

@@ -124,7 +124,7 @@ pub fn load_gltf(
             }
 
             // Create Geometry (BLAS)
-            let geo = geometry::build_blas(
+            let geo = geometry::alloc_blas(
                 device,
                 &format!("GLTF Mesh {}", mesh.index()),
                 positions,

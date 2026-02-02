@@ -47,9 +47,9 @@ impl State {
         let ctx = WgpuContext::new(window.clone()).await;
 
         // 2. シーン構築
-        // let scene_resources = scene::create_restir_scene(&ctx.device, &ctx.queue);
-        let scene_resources = scene::create_cornell_box(&ctx.device, &ctx.queue);
-        // let scene_resources = scene::create_avocado_scene(&ctx.device, &ctx.queue);
+        // let scene_resources = scene::scenes::create_restir_scene(&ctx.device, &ctx.queue);
+        // let scene_resources = scene::scenes::create_cornell_box(&ctx.device, &ctx.queue);
+        let scene_resources = scene::scenes::create_avocado_scene(&ctx.device, &ctx.queue);
 
         // 3. カメラ初期化 (最初はデフォルトのアスペクト比で初期化)
         let camera_controller = CameraController::new();

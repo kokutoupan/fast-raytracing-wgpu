@@ -500,7 +500,7 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
     hit.normal = decode_octahedral_normal(normal_w.xy);
     hit.front_face = true;
     hit.ffnormal = hit.normal;
-    // Note: hit.uv, hit.t, hit.mat_id are not fully reconstructed here as we use GBuffer data directly for material
+    hit.uv = normal_w.zw;
 
     var mat: Material;
     let mat_id = u32(pos_w.w + 0.1);
@@ -522,6 +522,14 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
     var accumulated_color = vec3f(0.0);
     var throughput = vec3f(1.0);
     var wo = normalize(camera.view_pos.xyz - hit.pos);
+
+    // --- Primary Emission (Texture) ---
+    if mat_id < arrayLength(&materials) {
+         if mat.light_index == -1 && mat.emissive_tex_id != 4294967295u {
+            let emissive_col = textureSampleLevel(textures, tex_sampler, hit.uv, i32(mat.emissive_tex_id), 0.0).rgb;
+            accumulated_color += emissive_col;
+        }
+    }
 
     var next_dir = vec3f(0.0);
     var last_bsdf_pdf = 0.0;

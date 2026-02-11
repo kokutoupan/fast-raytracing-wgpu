@@ -74,7 +74,7 @@ struct MeshInfo {
 
 // Output Textures
 @group(0) @binding(6) var out_pos: texture_storage_2d<rgba32float, write>;
-@group(0) @binding(7) var out_normal: texture_storage_2d<rg32float, write>;
+@group(0) @binding(7) var out_normal: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(8) var out_albedo: texture_storage_2d<rgba8unorm, write>;
 
 @group(0) @binding(9) var out_motion: texture_storage_2d<rg32float, write>;
@@ -235,7 +235,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     textureStore(out_pos, coord, vec4f(pos, f32(mat_id)));
 
     let encoded_n = encode_octahedral_normal(final_normal);
-    textureStore(out_normal, coord, vec4f(encoded_n, 0.0, 0.0));
+    textureStore(out_normal, coord, vec4f(encoded_n, tex_uv));
 
     textureStore(out_albedo, coord, vec4f(base_color, 1.0)); // Occlusion is burned in
     // Motion

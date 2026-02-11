@@ -486,6 +486,7 @@ pub fn create_damaged_helmet_scene(device: &wgpu::Device, queue: &wgpu::Queue) -
                 // Normal
                 if mat.normal_tex_id == u32::MAX {
                     mat.normal_tex_id = 2; // Default Flat Normal
+                    println!("Normal texture not found for material");
                 } else {
                     mat.normal_tex_id += base_tex_id;
                 }
@@ -493,6 +494,7 @@ pub fn create_damaged_helmet_scene(device: &wgpu::Device, queue: &wgpu::Queue) -
                 // Occlusion
                 if mat.occlusion_tex_id == u32::MAX {
                     mat.occlusion_tex_id = 0; // Default White (No occlusion)
+                    println!("Occlusion texture not found for material");
                 } else {
                     mat.occlusion_tex_id += base_tex_id;
                 }
@@ -500,8 +502,10 @@ pub fn create_damaged_helmet_scene(device: &wgpu::Device, queue: &wgpu::Queue) -
                 // Emissive
                 if mat.emissive_tex_id == u32::MAX {
                     mat.emissive_tex_id = 3; // Default Black (No emission)
+                    println!("Emissive texture not found for material");
                 } else {
                     mat.emissive_tex_id += base_tex_id;
+                    // mat.emissive_tex_id = 3;
                 }
 
                 gltf_mats.push(mat);
@@ -580,7 +584,9 @@ pub fn create_damaged_helmet_scene(device: &wgpu::Device, queue: &wgpu::Queue) -
         builder.add_instance(
             mesh_id,
             mat_id,
-            Mat4::from_translation(Vec3::new(0.0, 0.0, 0.0)) * Mat4::from_scale(Vec3::splat(0.5)),
+            Mat4::from_translation(Vec3::new(0.0, 0.0, 0.0))
+                * Mat4::from_scale(Vec3::splat(0.5))
+                * Mat4::from_rotation_x(std::f32::consts::PI / 2.0),
             0x1,
         );
     }

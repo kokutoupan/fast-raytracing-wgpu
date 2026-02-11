@@ -48,6 +48,8 @@ struct Material {
     occlusion_tex_id: u32,
     emissive_tex_id: u32,
     metallic_roughness_tex_id: u32,
+    emissive_factor: vec3f,
+    _pad_emissive: f32,
 }
 
 struct VertexAttributes {
@@ -515,11 +517,15 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
     var throughput = vec3f(1.0);
     var wo = normalize(camera.view_pos.xyz - hit.pos);
 
-    // --- Primary Emission (Texture) ---
+    // --- Primary Emission (Texture & Factor) ---
     if mat_id < arrayLength(&materials) {
-         if mat.light_index == -1 && mat.emissive_tex_id != 4294967295u {
-            let emissive_col = textureSampleLevel(textures, tex_sampler, hit.uv, i32(mat.emissive_tex_id), 0.0).rgb;
-            accumulated_color += emissive_col;
+         if mat.light_index == -1 {
+            var emission = mat.emissive_factor;
+            if mat.emissive_tex_id != 4294967295u {
+                let tex_emission = textureSampleLevel(textures, tex_sampler, hit.uv, i32(mat.emissive_tex_id), 0.0).rgb;
+                emission = emission * tex_emission;
+            }
+            accumulated_color += emission;
         }
     }
 
@@ -532,8 +538,12 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
     // -------------------------------------------------------------------------
 
     if mat.light_index >= 0 {
-        let light = lights[mat.light_index];
-        accumulated_color += light.emission.rgb * light.emission.a;
+        var emission = mat.emissive_factor;
+        if mat.emissive_tex_id != 4294967295u {
+             let tex_emission = textureSampleLevel(textures, tex_sampler, hit.uv, i32(mat.emissive_tex_id), 0.0).rgb;
+             emission = emission * tex_emission;
+        }
+        accumulated_color += emission;
         result.radiance = accumulated_color;
         return result;
     }

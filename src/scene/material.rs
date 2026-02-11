@@ -18,6 +18,10 @@ pub struct Material {
     pub occlusion_tex_id: u32,
     pub emissive_tex_id: u32,
     pub metallic_roughness_tex_id: u32, // Replaces _pad1, ensures 64-byte alignment
+
+    // --- Emissive Factor ---
+    pub emissive_factor: [f32; 3], // 12 bytes
+    pub _pad_emissive: f32,        // 4 bytes -> Total 80 bytes
 }
 
 #[allow(dead_code)]
@@ -36,6 +40,8 @@ impl Material {
             occlusion_tex_id: u32::MAX,
             emissive_tex_id: u32::MAX,
             metallic_roughness_tex_id: u32::MAX,
+            emissive_factor: [0.0, 0.0, 0.0],
+            _pad_emissive: 0.0,
         }
     }
 
@@ -90,6 +96,11 @@ impl Material {
 
     pub fn metallic_roughness_texture(mut self, id: u32) -> Self {
         self.metallic_roughness_tex_id = id;
+        self
+    }
+
+    pub fn emissive_factor(mut self, factor: [f32; 3]) -> Self {
+        self.emissive_factor = factor;
         self
     }
 }

@@ -32,6 +32,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     let mat_light = builder.add_material(
         Material::new([0.0, 0.0, 0.0, 1.0])
             .light_index(0)
+            .emissive_factor([10.0, 10.0, 10.0]) // Quad Light Emission [1.0, 1.0, 1.0] * 10.0
             .texture(0),
     );
     let mat_red = builder.add_material(Material::new([0.65, 0.05, 0.05, 1.0]).texture(0));
@@ -52,6 +53,7 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     let mat_sphere_light = builder.add_material(
         Material::new([1.0, 1.0, 1.0, 1.0])
             .light_index(1) // 球体ライトのインデックス
+            .emissive_factor([0.2, 0.2, 9.0]) // Sphere Light Emission [0.02, 0.02, 0.9] * 10.0
             .texture(0),
     );
 
@@ -229,6 +231,11 @@ pub fn create_restir_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneR
             let mat_id = builder.add_material(
                 Material::new([color[0], color[1], color[2], 1.0])
                     .light_index((r * cols + c) as i32)
+                    .emissive_factor([
+                        color[0] * emission_strength,
+                        color[1] * emission_strength,
+                        color[2] * emission_strength,
+                    ])
                     .texture(0),
             );
 
@@ -385,12 +392,12 @@ pub fn create_avocado_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> Scene
     );
     // Light Material (Emissive)
     let mat_light = builder.add_material(
-        Material::new([1.0, 1.0, 1.0, 10.0]) // High intensity color
+        Material::new([1.0, 1.0, 1.0, 1.0]) // High intensity color
             .light_index(0) // Map to first light
             .texture(0)
             .normal_texture(2)
             .occlusion_texture(0)
-            .emissive_texture(3),
+            .emissive_factor([10.0, 10.0, 10.0]),
     );
 
     let mut gltf_mat_ids = Vec::new();
@@ -557,12 +564,11 @@ pub fn create_damaged_helmet_scene(device: &wgpu::Device, queue: &wgpu::Queue) -
     );
     // Light Material (Emissive)
     let mat_light = builder.add_material(
-        Material::new([1.0, 1.0, 1.0, 10.0]) // High intensity color
+        Material::new([1.0, 1.0, 1.0, 1.0]) // High intensity color
+            .emissive_factor([10.0, 10.0, 10.0])
             .light_index(0) // Map to first light
             .texture(0)
-            .normal_texture(2)
-            .occlusion_texture(0)
-            .emissive_texture(3),
+            .occlusion_texture(0),
     );
 
     let mut gltf_mat_ids = Vec::new();

@@ -81,11 +81,8 @@ pub fn load_gltf(
             mat = mat.metallic_roughness_texture(mr_info.texture().source().index() as u32);
         }
 
-        // Emissive Factor? glTF has emissiveFactor.
-        // Material struct doesn't have explicit emissiveFactor field yet,
-        // effectively we assume emissive texture * 1.0.
-        // Or we could store it in base_color if light_index >= 0?
-        // For now, let's just respect the map ID.
+        let emissive_factor = material.emissive_factor();
+        mat = mat.emissive_factor(emissive_factor);
 
         materials.push(mat);
     }

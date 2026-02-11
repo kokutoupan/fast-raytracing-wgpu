@@ -36,19 +36,26 @@ struct Reservoir {
 
 struct Material {
     base_color: vec4f,
-    light_index: i32,
-    _p0: u32,
-    _p1: u32,
-    transmission: f32,
+    emissive_factor: vec3f,
     roughness: f32,
     metallic: f32,
+    transmission: f32,
     ior: f32,
-    tex_id: u32,
+    light_index: i32,
+    tex_info_0: u32,
+    tex_info_1: u32,
+    tex_info_2: u32,
+    _pad_final: u32,
+}
+
+fn unpack_u16(packed_val: u32) -> vec2u {
+    return vec2u(packed_val & 0xFFFFu, packed_val >> 16u);
 }
 
 struct VertexAttributes {
     normal: vec2f,
     uv: vec2f,
+    tangent: vec4f,
 }
 
 struct MeshInfo {
@@ -79,6 +86,7 @@ struct HitInfo {
     mat_id: u32,
     front_face: bool,
     t: f32,
+    tangent: vec4f,
 }
 
 struct PathResult {
@@ -420,17 +428,27 @@ fn reconstruct_geometry_hit(
     let n0 = decode_octahedral_normal(v0.normal);
     let n1 = decode_octahedral_normal(v1.normal);
     let n2 = decode_octahedral_normal(v2.normal);
+    
+    let t0 = v0.tangent;
+    let t1 = v1.tangent;
+    let t2 = v2.tangent;
 
     let u = bary.x;
     let v = bary.y;
     let w = 1.0 - u - v;
 
     let local_normal = normalize(n0 * w + n1 * u + n2 * v);
+    let local_tangent = normalize(t0.xyz * w + t1.xyz * u + t2.xyz * v);
+
     let uv_interp = v0.uv * w + v1.uv * u + v2.uv * v;
 
     let m_inv = mat3x3f(w2o[0], w2o[1], w2o[2]);
 
     hit.normal = normalize(local_normal * m_inv);
+    // Transform tangent to world space
+    let tangent_w = normalize(local_tangent * m_inv);
+    hit.tangent = vec4f(tangent_w, t0.w);
+
     hit.uv = uv_interp;
     hit.front_face = front_face;
     hit.ffnormal = select(-hit.normal, hit.normal, hit.front_face);
@@ -485,7 +503,7 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
     hit.normal = decode_octahedral_normal(normal_w.xy);
     hit.front_face = true;
     hit.ffnormal = hit.normal;
-    // Note: hit.uv, hit.t, hit.mat_id are not fully reconstructed here as we use GBuffer data directly for material
+    hit.uv = normal_w.zw;
 
     var mat: Material;
     let mat_id = u32(pos_w.w + 0.1);
@@ -503,10 +521,41 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
         mat.light_index = -1;
     }
 
+    // Unpack texture IDs
+    let tex_0 = unpack_u16(mat.tex_info_0);
+    let tex_id = tex_0.x;
+    // normal_tex_id = tex_0.y
+    
+    let tex_1 = unpack_u16(mat.tex_info_1);
+    // occlusion_tex_id = tex_1.x
+    let emissive_tex_id = tex_1.y;
+
+    let tex_2 = unpack_u16(mat.tex_info_2);
+    let metallic_roughness_tex_id = tex_2.x;
+
+    // --- Metallic Roughness Map Sampling ---
+    if metallic_roughness_tex_id != 65535u {
+        let mr = textureSampleLevel(textures, tex_sampler, hit.uv, i32(metallic_roughness_tex_id), 0.0);
+        mat.metallic = mr.b * mat.metallic;
+        mat.roughness = mr.g * mat.roughness;
+    }
+
     var base_color = mat.base_color.rgb;
     var accumulated_color = vec3f(0.0);
     var throughput = vec3f(1.0);
     var wo = normalize(camera.view_pos.xyz - hit.pos);
+
+    // --- Primary Emission (Texture & Factor) ---
+    if mat_id < arrayLength(&materials) {
+         if mat.light_index == -1 {
+            var emission = mat.emissive_factor;
+            if emissive_tex_id != 65535u {
+                let tex_emission = textureSampleLevel(textures, tex_sampler, hit.uv, i32(emissive_tex_id), 0.0).rgb;
+                emission = emission * tex_emission;
+            }
+            accumulated_color += emission;
+        }
+    }
 
     var next_dir = vec3f(0.0);
     var last_bsdf_pdf = 0.0;
@@ -517,8 +566,12 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
     // -------------------------------------------------------------------------
 
     if mat.light_index >= 0 {
-        let light = lights[mat.light_index];
-        accumulated_color += light.emission.rgb * light.emission.a;
+        var emission = mat.emissive_factor;
+        if emissive_tex_id != 65535u {
+             let tex_emission = textureSampleLevel(textures, tex_sampler, hit.uv, i32(emissive_tex_id), 0.0).rgb;
+             emission = emission * tex_emission;
+        }
+        accumulated_color += emission;
         result.radiance = accumulated_color;
         return result;
     }
@@ -605,8 +658,48 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
         
         // Update Material & Base Color
         mat = materials[hit.mat_id];
-        let tex_color = textureSampleLevel(textures, tex_sampler, hit.uv, i32(mat.tex_id), 0.0);
-        base_color = mat.base_color.rgb * tex_color.rgb;
+        var tex_color = vec4f(1.0);
+        
+        let tex_0 = unpack_u16(mat.tex_info_0);
+        let tex_id = tex_0.x;
+        
+        if tex_id != 65535u {
+            tex_color = textureSampleLevel(textures, tex_sampler, hit.uv, i32(tex_id), 0.0);
+        }
+
+        var occlusion = 1.0;
+        let tex_1 = unpack_u16(mat.tex_info_1);
+        let occlusion_tex_id = tex_1.x;
+        let emissive_tex_id = tex_1.y;
+        
+        if occlusion_tex_id != 65535u {
+            occlusion = textureSampleLevel(textures, tex_sampler, hit.uv, i32(occlusion_tex_id), 0.0).r;
+        }
+        base_color = mat.base_color.rgb * tex_color.rgb * occlusion;
+
+        // --- Normal Mapping (Perturb hit.ffnormal) ---
+        let normal_tex_id = tex_0.y;
+        if normal_tex_id != 65535u {
+            let normal_map = textureSampleLevel(textures, tex_sampler, hit.uv, i32(normal_tex_id), 0.0).rgb;
+            let normal_local = normalize(normal_map * 2.0 - 1.0);
+            
+            let tangent_sign = hit.tangent.w;
+            let tangent_w = hit.tangent.xyz;
+            let N_ff = hit.ffnormal;
+
+            // Re-orthogonalize T against N_ff
+            let T_ff = normalize(tangent_w - N_ff * dot(N_ff, tangent_w));
+            let B_ff = normalize(cross(N_ff, T_ff)) * tangent_sign;
+            let TBN_ff = mat3x3f(T_ff, B_ff, N_ff);
+            
+            hit.ffnormal = normalize(TBN_ff * normal_local);
+        }
+
+        // --- Emission (via Texture) ---
+        if mat.light_index == -1 && emissive_tex_id != 65535u {
+            let emissive_col = textureSampleLevel(textures, tex_sampler, hit.uv, i32(emissive_tex_id), 0.0).rgb;
+            accumulated_color += emissive_col * throughput;
+        }
 
         // --- Shading (Secondary) ---
 
@@ -810,9 +903,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
     let mat = materials[mat_id];
     if mat.roughness < 0.1 || mat.metallic > 0.9 || mat.transmission > 0.1 {
-        num_neighbors = 0u;
-        // num_neighbors = 2u;
-        radius = 2.0; // かなりの近傍のみ探索する
+        // num_neighbors = 0u;
+        num_neighbors = 3u;
+        radius = 4.0; // かなりの近傍のみ探索する
     }
 
     for (var i = 0u; i < num_neighbors; i++) {

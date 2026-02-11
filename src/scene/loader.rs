@@ -58,7 +58,8 @@ pub fn load_gltf(
             .texture(u32::MAX) // Default None
             .normal_texture(u32::MAX)
             .occlusion_texture(u32::MAX)
-            .emissive_texture(u32::MAX);
+            .emissive_texture(u32::MAX)
+            .metallic_roughness_texture(u32::MAX);
 
         if let Some(texture_info) = pbr.base_color_texture() {
             mat = mat.texture(texture_info.texture().source().index() as u32);
@@ -74,6 +75,10 @@ pub fn load_gltf(
 
         if let Some(emissive_tex) = material.emissive_texture() {
             mat = mat.emissive_texture(emissive_tex.texture().source().index() as u32);
+        }
+
+        if let Some(mr_info) = pbr.metallic_roughness_texture() {
+            mat = mat.metallic_roughness_texture(mr_info.texture().source().index() as u32);
         }
 
         // Emissive Factor? glTF has emissiveFactor.

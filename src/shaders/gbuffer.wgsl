@@ -24,6 +24,7 @@ struct Material {
     normal_tex_id: u32,
     occlusion_tex_id: u32,
     emissive_tex_id: u32,
+    metallic_roughness_tex_id: u32,
 }
 
 struct VertexAttributes {

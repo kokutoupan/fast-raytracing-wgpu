@@ -47,6 +47,7 @@ struct Material {
     normal_tex_id: u32,
     occlusion_tex_id: u32,
     emissive_tex_id: u32,
+    metallic_roughness_tex_id: u32,
 }
 
 struct VertexAttributes {
@@ -500,6 +501,13 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
         mat.metallic = albedo_raw.a;
         mat.ior = 1.0;
         mat.light_index = -1;
+    }
+
+    // --- Metallic Roughness Map Sampling ---
+    if mat.metallic_roughness_tex_id != 4294967295u {
+        let mr = textureSampleLevel(textures, tex_sampler, hit.uv, i32(mat.metallic_roughness_tex_id), 0.0);
+        mat.metallic = mr.b * mat.metallic;
+        mat.roughness = mr.g * mat.roughness;
     }
 
     var base_color = mat.base_color.rgb;

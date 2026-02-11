@@ -334,11 +334,15 @@ pub fn create_avocado_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> Scene
                     mat.occlusion_tex_id += base_tex_id;
                 }
 
-                // Emissive
                 if mat.emissive_tex_id == u32::MAX {
                     mat.emissive_tex_id = 3; // Default Black (No emission)
                 } else {
                     mat.emissive_tex_id += base_tex_id;
+                }
+
+                // Metallic Roughness
+                if mat.metallic_roughness_tex_id != u32::MAX {
+                    mat.metallic_roughness_tex_id += base_tex_id;
                 }
 
                 gltf_mats.push(mat);
@@ -506,6 +510,11 @@ pub fn create_damaged_helmet_scene(device: &wgpu::Device, queue: &wgpu::Queue) -
                 } else {
                     mat.emissive_tex_id += base_tex_id;
                     // mat.emissive_tex_id = 3;
+                }
+
+                // Metallic Roughness
+                if mat.metallic_roughness_tex_id != u32::MAX {
+                    mat.metallic_roughness_tex_id += base_tex_id;
                 }
 
                 gltf_mats.push(mat);

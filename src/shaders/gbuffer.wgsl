@@ -13,20 +13,20 @@ struct Camera {
 
 struct Material {
     base_color: vec4f,
-    light_index: i32,
-    _p0: u32,
-    _p1: u32,
-    transmission: f32,
+    emissive_factor: vec3f,
     roughness: f32,
     metallic: f32,
+    transmission: f32,
     ior: f32,
-    tex_id: u32,
-    normal_tex_id: u32,
-    occlusion_tex_id: u32,
-    emissive_tex_id: u32,
-    metallic_roughness_tex_id: u32,
-    emissive_factor: vec3f,
-    _pad_emissive: f32,
+    light_index: i32,
+    tex_info_0: u32,
+    tex_info_1: u32,
+    tex_info_2: u32,
+    _pad_final: u32,
+}
+
+fn unpack_u16(packed_val: u32) -> vec2u {
+    return vec2u(packed_val & 0xFFFFu, packed_val >> 16u);
 }
 
 struct VertexAttributes {
@@ -175,26 +175,34 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     // --- Texture Sampling ---
     // 1. Base Color
     var tex_color = vec4f(1.0);
-    if mat.tex_id != 4294967295u {
-        tex_color = textureSampleLevel(textures, tex_sampler, tex_uv, i32(mat.tex_id), 0.0);
+    let tex_ids_0 = unpack_u16(mat.tex_info_0);
+    let tex_id = tex_ids_0.x;
+    
+    if tex_id != 65535u {
+        tex_color = textureSampleLevel(textures, tex_sampler, tex_uv, i32(tex_id), 0.0);
     }
 
     // 2. Occlusion
     var occlusion = 1.0;
-    if mat.occlusion_tex_id != 4294967295u {
-        occlusion = textureSampleLevel(textures, tex_sampler, tex_uv, i32(mat.occlusion_tex_id), 0.0).r;
+    let tex_ids_1 = unpack_u16(mat.tex_info_1);
+    let occlusion_tex_id = tex_ids_1.x;
+    
+    if occlusion_tex_id != 65535u {
+        occlusion = textureSampleLevel(textures, tex_sampler, tex_uv, i32(occlusion_tex_id), 0.0).r;
     }
 
     // 4. Normal Map
     var normal_local = vec3f(0.0, 0.0, 1.0);
-    if mat.normal_tex_id != 4294967295u {
-        let normal_map = textureSampleLevel(textures, tex_sampler, tex_uv, i32(mat.normal_tex_id), 0.0).rgb;
+    let normal_tex_id = tex_ids_0.y;
+    
+    if normal_tex_id != 65535u {
+        let normal_map = textureSampleLevel(textures, tex_sampler, tex_uv, i32(normal_tex_id), 0.0).rgb;
         normal_local = normalize(normal_map * 2.0 - 1.0);
     }
     
     // Perturb Normal
     var final_normal = ffnormal;
-    if mat.normal_tex_id != 4294967295u {
+    if normal_tex_id != 65535u {
         let tangent_sign = v0.tangent.w;
         // ... (TBN calc) ...
         // We use v0.tangent here, but we should probably interpolate tangents?

@@ -1,27 +1,30 @@
-// GPUに送るマテリアルデータ (64バイト) - Padding adjusted
+// GPUに送るマテリアルデータ (64バイト) - Optimized
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Material {
-    pub base_color: [f32; 4], // 16 bytes
-    pub light_index: i32,     // 4 bytes
-    pub _pad0: [u32; 2],      // 8 bytes
-    pub transmission: f32,    // 4 bytes
+    // 0-16 bytes
+    pub base_color: [f32; 4],
 
-    // --- PBR Parameters (4 bytes each) ---
-    pub roughness: f32,
-    pub metallic: f32,
-    pub ior: f32,
-
-    // --- Texture IDs ---
-    pub tex_id: u32, // Base Color
-    pub normal_tex_id: u32,
-    pub occlusion_tex_id: u32,
-    pub emissive_tex_id: u32,
-    pub metallic_roughness_tex_id: u32, // Replaces _pad1, ensures 64-byte alignment
-
-    // --- Emissive Factor ---
+    // 16-32 bytes
     pub emissive_factor: [f32; 3], // 12 bytes
-    pub _pad_emissive: f32,        // 4 bytes -> Total 80 bytes
+    pub roughness: f32,            // 4 bytes
+
+    // 32-48 bytes
+    pub metallic: f32,
+    pub transmission: f32,
+    pub ior: f32,
+    pub light_index: i32,
+
+    // 48-64 bytes
+    // Texture IDs packed as [u16; 2] inside u32
+    // tex_info_0: [tex_id (low), normal_tex_id (high)]
+    pub tex_info_0: u32,
+    // tex_info_1: [occlusion_tex_id (low), emissive_tex_id (high)]
+    pub tex_info_1: u32,
+    // tex_info_2: [metallic_roughness_tex_id (low), padding (high)]
+    pub tex_info_2: u32,
+
+    pub _pad_final: u32, // Ensure full 64 bytes (16-byte align)
 }
 
 #[allow(dead_code)]
@@ -29,19 +32,17 @@ impl Material {
     pub fn new(base_color: [f32; 4]) -> Self {
         Self {
             base_color,
-            light_index: -1,
-            _pad0: [0; 2],
-            transmission: 0.0,
+            emissive_factor: [0.0, 0.0, 0.0],
             roughness: 0.5,
             metallic: 0.0,
+            transmission: 0.0,
             ior: 1.0,
-            tex_id: u32::MAX, // Default to "None"
-            normal_tex_id: u32::MAX,
-            occlusion_tex_id: u32::MAX,
-            emissive_tex_id: u32::MAX,
-            metallic_roughness_tex_id: u32::MAX,
-            emissive_factor: [0.0, 0.0, 0.0],
-            _pad_emissive: 0.0,
+            light_index: -1,
+            // Pack u16::MAX (0xFFFF) for "None"
+            tex_info_0: 0xFFFFFFFF, // tex_id, normal
+            tex_info_1: 0xFFFFFFFF, // occlusion, emissive
+            tex_info_2: 0xFFFFFFFF, // metallic_roughness, padding
+            _pad_final: 0,
         }
     }
 
@@ -74,29 +75,84 @@ impl Material {
         self
     }
 
+    // Helper to pack u16
+    fn pack(current: u32, val: u32, is_high: bool) -> u32 {
+        let val_u16 = (val & 0xFFFF) as u32;
+        if is_high {
+            (current & 0x0000FFFF) | (val_u16 << 16)
+        } else {
+            (current & 0xFFFF0000) | val_u16
+        }
+    }
+
     pub fn texture(mut self, id: u32) -> Self {
-        self.tex_id = id;
+        self.tex_info_0 = Self::pack(self.tex_info_0, id, false);
         self
     }
 
     pub fn normal_texture(mut self, id: u32) -> Self {
-        self.normal_tex_id = id;
+        self.tex_info_0 = Self::pack(self.tex_info_0, id, true);
         self
     }
 
     pub fn occlusion_texture(mut self, id: u32) -> Self {
-        self.occlusion_tex_id = id;
+        self.tex_info_1 = Self::pack(self.tex_info_1, id, false);
         self
     }
 
     pub fn emissive_texture(mut self, id: u32) -> Self {
-        self.emissive_tex_id = id;
+        self.tex_info_1 = Self::pack(self.tex_info_1, id, true);
         self
     }
 
     pub fn metallic_roughness_texture(mut self, id: u32) -> Self {
-        self.metallic_roughness_tex_id = id;
+        self.tex_info_2 = Self::pack(self.tex_info_2, id, false);
         self
+    }
+
+    // --- Getters for unpacking values ---
+    fn unpack(packed: u32, is_high: bool) -> u32 {
+        if is_high {
+            (packed >> 16) & 0xFFFF
+        } else {
+            packed & 0xFFFF
+        }
+    }
+
+    pub fn get_texture(&self) -> u32 {
+        Self::unpack(self.tex_info_0, false)
+    }
+
+    pub fn get_normal_texture(&self) -> u32 {
+        Self::unpack(self.tex_info_0, true)
+    }
+
+    pub fn get_occlusion_texture(&self) -> u32 {
+        Self::unpack(self.tex_info_1, false)
+    }
+
+    pub fn get_emissive_texture(&self) -> u32 {
+        Self::unpack(self.tex_info_1, true)
+    }
+
+    pub fn get_metallic_roughness_texture(&self) -> u32 {
+        Self::unpack(self.tex_info_2, false)
+    }
+
+    pub fn tex_id(&self) -> u32 {
+        self.get_texture()
+    }
+    pub fn normal_tex_id(&self) -> u32 {
+        self.get_normal_texture()
+    }
+    pub fn occlusion_tex_id(&self) -> u32 {
+        self.get_occlusion_texture()
+    }
+    pub fn emissive_tex_id(&self) -> u32 {
+        self.get_emissive_texture()
+    }
+    pub fn metallic_roughness_tex_id(&self) -> u32 {
+        self.get_metallic_roughness_texture()
     }
 
     pub fn emissive_factor(mut self, factor: [f32; 3]) -> Self {

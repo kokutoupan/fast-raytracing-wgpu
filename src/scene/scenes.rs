@@ -321,35 +321,42 @@ pub fn create_avocado_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> Scene
             // Update material texture indices and add to list
             for mut mat in mats {
                 // Base Color
-                if mat.tex_id == u32::MAX {
-                    mat.tex_id = 0; // Default White
+                let tex_id = mat.tex_id();
+                if tex_id == 0xFFFF {
+                    // u16::MAX check
+                    mat = mat.texture(0); // Default White
                 } else {
-                    mat.tex_id += base_tex_id;
+                    mat = mat.texture(tex_id + base_tex_id);
                 }
 
                 // Normal
-                if mat.normal_tex_id == u32::MAX {
-                    mat.normal_tex_id = 2; // Default Flat Normal
+                let normal_tex_id = mat.normal_tex_id();
+                if normal_tex_id == 0xFFFF {
+                    mat = mat.normal_texture(2); // Default Flat Normal
                 } else {
-                    mat.normal_tex_id += base_tex_id;
+                    mat = mat.normal_texture(normal_tex_id + base_tex_id);
                 }
 
                 // Occlusion
-                if mat.occlusion_tex_id == u32::MAX {
-                    mat.occlusion_tex_id = 0; // Default White (No occlusion)
+                let occlusion_tex_id = mat.occlusion_tex_id();
+                if occlusion_tex_id == 0xFFFF {
+                    mat = mat.occlusion_texture(0); // Default White (No occlusion)
                 } else {
-                    mat.occlusion_tex_id += base_tex_id;
+                    mat = mat.occlusion_texture(occlusion_tex_id + base_tex_id);
                 }
 
-                if mat.emissive_tex_id == u32::MAX {
-                    mat.emissive_tex_id = 3; // Default Black (No emission)
+                // Emissive
+                let emissive_tex_id = mat.emissive_tex_id();
+                if emissive_tex_id == 0xFFFF {
+                    mat = mat.emissive_texture(3); // Default Black (No emission)
                 } else {
-                    mat.emissive_tex_id += base_tex_id;
+                    mat = mat.emissive_texture(emissive_tex_id + base_tex_id);
                 }
 
                 // Metallic Roughness
-                if mat.metallic_roughness_tex_id != u32::MAX {
-                    mat.metallic_roughness_tex_id += base_tex_id;
+                let mr_tex_id = mat.metallic_roughness_tex_id();
+                if mr_tex_id != 0xFFFF {
+                    mat = mat.metallic_roughness_texture(mr_tex_id + base_tex_id);
                 }
 
                 gltf_mats.push(mat);
@@ -486,42 +493,47 @@ pub fn create_damaged_helmet_scene(device: &wgpu::Device, queue: &wgpu::Queue) -
             }
 
             // Update material texture indices and add to list
+            // Update material texture indices and add to list
             for mut mat in mats {
                 // Base Color
-                if mat.tex_id == u32::MAX {
-                    mat.tex_id = 0; // Default White
+                let tex_id = mat.tex_id();
+                if tex_id == 0xFFFF {
+                    mat = mat.texture(0); // Default White
                 } else {
-                    mat.tex_id += base_tex_id;
+                    mat = mat.texture(tex_id + base_tex_id);
                 }
 
                 // Normal
-                if mat.normal_tex_id == u32::MAX {
-                    mat.normal_tex_id = 2; // Default Flat Normal
+                let normal_tex_id = mat.normal_tex_id();
+                if normal_tex_id == 0xFFFF {
+                    mat = mat.normal_texture(2); // Default Flat Normal
                     println!("Normal texture not found for material");
                 } else {
-                    mat.normal_tex_id += base_tex_id;
+                    mat = mat.normal_texture(normal_tex_id + base_tex_id);
                 }
 
                 // Occlusion
-                if mat.occlusion_tex_id == u32::MAX {
-                    mat.occlusion_tex_id = 0; // Default White (No occlusion)
+                let occlusion_tex_id = mat.occlusion_tex_id();
+                if occlusion_tex_id == 0xFFFF {
+                    mat = mat.occlusion_texture(0); // Default White (No occlusion)
                     println!("Occlusion texture not found for material");
                 } else {
-                    mat.occlusion_tex_id += base_tex_id;
+                    mat = mat.occlusion_texture(occlusion_tex_id + base_tex_id);
                 }
 
                 // Emissive
-                if mat.emissive_tex_id == u32::MAX {
-                    mat.emissive_tex_id = 3; // Default Black (No emission)
+                let emissive_tex_id = mat.emissive_tex_id();
+                if emissive_tex_id == 0xFFFF {
+                    mat = mat.emissive_texture(3); // Default Black (No emission)
                     println!("Emissive texture not found for material");
                 } else {
-                    mat.emissive_tex_id += base_tex_id;
-                    // mat.emissive_tex_id = 3;
+                    mat = mat.emissive_texture(emissive_tex_id + base_tex_id);
                 }
 
                 // Metallic Roughness
-                if mat.metallic_roughness_tex_id != u32::MAX {
-                    mat.metallic_roughness_tex_id += base_tex_id;
+                let mr_tex_id = mat.metallic_roughness_tex_id();
+                if mr_tex_id != 0xFFFF {
+                    mat = mat.metallic_roughness_texture(mr_tex_id + base_tex_id);
                 }
 
                 gltf_mats.push(mat);

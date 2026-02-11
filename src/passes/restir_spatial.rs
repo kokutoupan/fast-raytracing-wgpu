@@ -14,6 +14,7 @@ pub struct Reservoir {
 }
 
 impl Reservoir {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             y: 0,

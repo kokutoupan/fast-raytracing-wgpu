@@ -36,20 +36,20 @@ struct Reservoir {
 
 struct Material {
     base_color: vec4f,
-    light_index: i32,
-    _p0: u32,
-    _p1: u32,
-    transmission: f32,
+    emissive_factor: vec3f,
     roughness: f32,
     metallic: f32,
+    transmission: f32,
     ior: f32,
-    tex_id: u32,
-    normal_tex_id: u32,
-    occlusion_tex_id: u32,
-    emissive_tex_id: u32,
-    metallic_roughness_tex_id: u32,
-    emissive_factor: vec3f,
-    _pad_emissive: f32,
+    light_index: i32,
+    tex_info_0: u32,
+    tex_info_1: u32,
+    tex_info_2: u32,
+    _pad_final: u32,
+}
+
+fn unpack_u16(packed_val: u32) -> vec2u {
+    return vec2u(packed_val & 0xFFFFu, packed_val >> 16u);
 }
 
 struct VertexAttributes {
@@ -521,9 +521,21 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
         mat.light_index = -1;
     }
 
+    // Unpack texture IDs
+    let tex_0 = unpack_u16(mat.tex_info_0);
+    let tex_id = tex_0.x;
+    // normal_tex_id = tex_0.y
+    
+    let tex_1 = unpack_u16(mat.tex_info_1);
+    // occlusion_tex_id = tex_1.x
+    let emissive_tex_id = tex_1.y;
+
+    let tex_2 = unpack_u16(mat.tex_info_2);
+    let metallic_roughness_tex_id = tex_2.x;
+
     // --- Metallic Roughness Map Sampling ---
-    if mat.metallic_roughness_tex_id != 4294967295u {
-        let mr = textureSampleLevel(textures, tex_sampler, hit.uv, i32(mat.metallic_roughness_tex_id), 0.0);
+    if metallic_roughness_tex_id != 65535u {
+        let mr = textureSampleLevel(textures, tex_sampler, hit.uv, i32(metallic_roughness_tex_id), 0.0);
         mat.metallic = mr.b * mat.metallic;
         mat.roughness = mr.g * mat.roughness;
     }
@@ -537,8 +549,8 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
     if mat_id < arrayLength(&materials) {
          if mat.light_index == -1 {
             var emission = mat.emissive_factor;
-            if mat.emissive_tex_id != 4294967295u {
-                let tex_emission = textureSampleLevel(textures, tex_sampler, hit.uv, i32(mat.emissive_tex_id), 0.0).rgb;
+            if emissive_tex_id != 65535u {
+                let tex_emission = textureSampleLevel(textures, tex_sampler, hit.uv, i32(emissive_tex_id), 0.0).rgb;
                 emission = emission * tex_emission;
             }
             accumulated_color += emission;
@@ -555,8 +567,8 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
 
     if mat.light_index >= 0 {
         var emission = mat.emissive_factor;
-        if mat.emissive_tex_id != 4294967295u {
-             let tex_emission = textureSampleLevel(textures, tex_sampler, hit.uv, i32(mat.emissive_tex_id), 0.0).rgb;
+        if emissive_tex_id != 65535u {
+             let tex_emission = textureSampleLevel(textures, tex_sampler, hit.uv, i32(emissive_tex_id), 0.0).rgb;
              emission = emission * tex_emission;
         }
         accumulated_color += emission;
@@ -647,19 +659,28 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
         // Update Material & Base Color
         mat = materials[hit.mat_id];
         var tex_color = vec4f(1.0);
-        if mat.tex_id != 4294967295u {
-            tex_color = textureSampleLevel(textures, tex_sampler, hit.uv, i32(mat.tex_id), 0.0);
+        
+        let tex_0 = unpack_u16(mat.tex_info_0);
+        let tex_id = tex_0.x;
+        
+        if tex_id != 65535u {
+            tex_color = textureSampleLevel(textures, tex_sampler, hit.uv, i32(tex_id), 0.0);
         }
 
         var occlusion = 1.0;
-        if mat.occlusion_tex_id != 4294967295u {
-            occlusion = textureSampleLevel(textures, tex_sampler, hit.uv, i32(mat.occlusion_tex_id), 0.0).r;
+        let tex_1 = unpack_u16(mat.tex_info_1);
+        let occlusion_tex_id = tex_1.x;
+        let emissive_tex_id = tex_1.y;
+        
+        if occlusion_tex_id != 65535u {
+            occlusion = textureSampleLevel(textures, tex_sampler, hit.uv, i32(occlusion_tex_id), 0.0).r;
         }
         base_color = mat.base_color.rgb * tex_color.rgb * occlusion;
 
         // --- Normal Mapping (Perturb hit.ffnormal) ---
-        if mat.normal_tex_id != 4294967295u {
-            let normal_map = textureSampleLevel(textures, tex_sampler, hit.uv, i32(mat.normal_tex_id), 0.0).rgb;
+        let normal_tex_id = tex_0.y;
+        if normal_tex_id != 65535u {
+            let normal_map = textureSampleLevel(textures, tex_sampler, hit.uv, i32(normal_tex_id), 0.0).rgb;
             let normal_local = normalize(normal_map * 2.0 - 1.0);
             
             let tangent_sign = hit.tangent.w;
@@ -675,8 +696,8 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
         }
 
         // --- Emission (via Texture) ---
-        if mat.light_index == -1 && mat.emissive_tex_id != 4294967295u {
-            let emissive_col = textureSampleLevel(textures, tex_sampler, hit.uv, i32(mat.emissive_tex_id), 0.0).rgb;
+        if mat.light_index == -1 && emissive_tex_id != 65535u {
+            let emissive_col = textureSampleLevel(textures, tex_sampler, hit.uv, i32(emissive_tex_id), 0.0).rgb;
             accumulated_color += emissive_col * throughput;
         }
 

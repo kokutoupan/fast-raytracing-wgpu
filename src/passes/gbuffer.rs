@@ -4,7 +4,7 @@ use crate::wgpu_ctx::WgpuContext;
 pub struct GBufferPass {
     pub pipeline: wgpu::ComputePipeline,
     pub bind_groups: [wgpu::BindGroup; 2],
-    pub bind_group_layout: wgpu::BindGroupLayout,
+    // pub bind_group_layout: wgpu::BindGroupLayout, // Unused
     pub texture_bind_group: wgpu::BindGroup,
 }
 
@@ -270,7 +270,6 @@ impl GBufferPass {
         Self {
             pipeline,
             bind_groups: [bg0, bg1],
-            bind_group_layout,
             texture_bind_group: bind_group1,
         }
     }

@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
-// 頂点属性データ (16バイト) - Shaderに送る用
+// 頂点属性データ (32バイト) - Shaderに送る用
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct VertexAttributes {
-    pub normal: [f32; 2], // Octahedral encoded
-    pub uv: [f32; 2],     // uv
+    pub normal: [f32; 2],  // Octahedral encoded
+    pub uv: [f32; 2],      // uv
+    pub tangent: [f32; 4], // Tangent (xyz) + Sign (w)
 }
 
 pub struct Geometry {
@@ -86,22 +87,28 @@ pub fn create_plane_blas(device: &wgpu::Device) -> Geometry {
     let normal = [0.0, 1.0, 0.0];
     let encoded_normal = encode_octahedral_normal(normal);
 
+    let tangent = [1.0, 0.0, 0.0, 1.0]; // +X direction
+
     let attributes = vec![
         VertexAttributes {
             normal: encoded_normal,
             uv: [0.0, 1.0],
+            tangent,
         },
         VertexAttributes {
             normal: encoded_normal,
             uv: [1.0, 1.0],
+            tangent,
         },
         VertexAttributes {
             normal: encoded_normal,
             uv: [0.0, 0.0],
+            tangent,
         },
         VertexAttributes {
             normal: encoded_normal,
             uv: [1.0, 0.0],
+            tangent,
         },
     ];
     let indices: Vec<u32> = vec![0, 1, 2, 2, 1, 3]; // Triangle List
@@ -119,6 +126,7 @@ pub fn create_cube_blas(device: &wgpu::Device) -> Geometry {
     let sides = [
         (
             [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0, 1.0], // Tangent for Front (+Z) is +X
             [-0.5, -0.5, 0.5],
             [0.5, -0.5, 0.5],
             [0.5, 0.5, 0.5],
@@ -126,6 +134,7 @@ pub fn create_cube_blas(device: &wgpu::Device) -> Geometry {
         ), // Front
         (
             [0.0, 0.0, -1.0],
+            [-1.0, 0.0, 0.0, 1.0], // Tangent for Back (-Z) is -X
             [0.5, -0.5, -0.5],
             [-0.5, -0.5, -0.5],
             [-0.5, 0.5, -0.5],
@@ -133,6 +142,7 @@ pub fn create_cube_blas(device: &wgpu::Device) -> Geometry {
         ), // Back
         (
             [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0, 1.0], // Tangent for Top (+Y) is +X
             [-0.5, 0.5, 0.5],
             [0.5, 0.5, 0.5],
             [0.5, 0.5, -0.5],
@@ -140,6 +150,7 @@ pub fn create_cube_blas(device: &wgpu::Device) -> Geometry {
         ), // Top
         (
             [0.0, -1.0, 0.0],
+            [1.0, 0.0, 0.0, 1.0], // Tangent for Bottom (-Y) is +X
             [-0.5, -0.5, -0.5],
             [0.5, -0.5, -0.5],
             [0.5, -0.5, 0.5],
@@ -147,6 +158,7 @@ pub fn create_cube_blas(device: &wgpu::Device) -> Geometry {
         ), // Bottom
         (
             [1.0, 0.0, 0.0],
+            [0.0, 0.0, -1.0, 1.0], // Tangent for Right (+X) is -Z
             [0.5, -0.5, 0.5],
             [0.5, -0.5, -0.5],
             [0.5, 0.5, -0.5],
@@ -154,6 +166,7 @@ pub fn create_cube_blas(device: &wgpu::Device) -> Geometry {
         ), // Right
         (
             [-1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 1.0], // Tangent for Left (-X) is +Z
             [-0.5, -0.5, -0.5],
             [-0.5, -0.5, 0.5],
             [-0.5, 0.5, 0.5],
@@ -161,31 +174,35 @@ pub fn create_cube_blas(device: &wgpu::Device) -> Geometry {
         ), // Left
     ];
 
-    for (normal, v0, v1, v2, v3) in sides {
+    for (normal, tangent, v0, v1, v2, v3) in sides {
         let encoded_normal = encode_octahedral_normal(normal);
 
         positions.push([v0[0], v0[1], v0[2], 1.0]);
         attributes.push(VertexAttributes {
             normal: encoded_normal,
             uv: [0.0, 1.0],
+            tangent,
         });
 
         positions.push([v1[0], v1[1], v1[2], 1.0]);
         attributes.push(VertexAttributes {
             normal: encoded_normal,
             uv: [1.0, 1.0],
+            tangent,
         });
 
         positions.push([v2[0], v2[1], v2[2], 1.0]);
         attributes.push(VertexAttributes {
             normal: encoded_normal,
             uv: [1.0, 0.0],
+            tangent,
         });
 
         positions.push([v3[0], v3[1], v3[2], 1.0]);
         attributes.push(VertexAttributes {
             normal: encoded_normal,
             uv: [0.0, 0.0],
+            tangent,
         });
 
         indices.push(v_idx);
@@ -215,10 +232,13 @@ pub fn create_sphere_blas(device: &wgpu::Device, subdivisions: u32) -> Geometry 
         let pos = [n[0] * 0.5, n[1] * 0.5, n[2] * 0.5, 1.0];
         let encoded_normal = encode_octahedral_normal(n);
 
+        let default_tangent = [1.0, 0.0, 0.0, 1.0];
+
         positions.push(pos);
         attributes.push(VertexAttributes {
             normal: encoded_normal,
             uv: [0.0, 0.0], // TODO: Spherical mapping
+            tangent: default_tangent,
         });
         positions.len() as u32 - 1
     };
@@ -311,10 +331,13 @@ fn get_midpoint(
     let n = [mid[0] / length, mid[1] / length, mid[2] / length];
     let encoded_normal = encode_octahedral_normal(n);
 
+    let default_tangent = [1.0, 0.0, 0.0, 1.0];
+
     positions.push([n[0] * 0.5, n[1] * 0.5, n[2] * 0.5, 1.0]);
     attributes.push(VertexAttributes {
         normal: encoded_normal,
         uv: [0.0, 0.0],
+        tangent: default_tangent,
     });
 
     let index = positions.len() as u32 - 1;
@@ -354,22 +377,27 @@ pub fn create_crystal_blas(device: &wgpu::Device) -> Geometry {
 
         let base = positions.len() as u32;
 
+        let default_tangent = [1.0, 0.0, 0.0, 1.0];
+
         positions.push([p0.x, p0.y, p0.z, 1.0]);
         attributes.push(VertexAttributes {
             normal: encoded_normal,
             uv: [0.0; 2],
+            tangent: default_tangent,
         });
 
         positions.push([p1.x, p1.y, p1.z, 1.0]);
         attributes.push(VertexAttributes {
             normal: encoded_normal,
             uv: [0.0; 2],
+            tangent: default_tangent,
         });
 
         positions.push([p2.x, p2.y, p2.z, 1.0]);
         attributes.push(VertexAttributes {
             normal: encoded_normal,
             uv: [0.0; 2],
+            tangent: default_tangent,
         });
 
         indices.push(base);

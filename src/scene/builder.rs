@@ -53,6 +53,17 @@ impl SceneBuilder {
             }
         }));
         self.textures.push(checker);
+
+        // 2: Flat Normal (128, 128, 255)
+        let flat_normal = DynamicImage::ImageRgba8(ImageBuffer::from_fn(512, 512, |_, _| {
+            Rgba([128, 128, 255, 255])
+        }));
+        self.textures.push(flat_normal);
+
+        // 3: Black (0, 0, 0) - For Zero Emissive / Zero Roughness etc.
+        let black =
+            DynamicImage::ImageRgba8(ImageBuffer::from_fn(512, 512, |_, _| Rgba([0, 0, 0, 255])));
+        self.textures.push(black);
     }
 
     pub fn add_texture(&mut self, texture: DynamicImage) -> u32 {

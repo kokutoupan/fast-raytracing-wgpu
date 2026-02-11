@@ -304,7 +304,7 @@ pub fn create_avocado_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> Scene
             gltf_geos = geos;
 
             // Load textures into builder and get the base ID offset
-            // Current textures in builder: 0 (White), 1 (Checker) => next is 2
+            // Current textures in builder: 0 (White), 1 (Checker), 2 (Flat Normal), 3 (Black) => next is 4
             let base_tex_id = builder.textures.len() as u32;
 
             for img in images {
@@ -313,45 +313,34 @@ pub fn create_avocado_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> Scene
 
             // Update material texture indices and add to list
             for mut mat in mats {
-                // Determine if material has a texture.
-                // Since I didn't successfully update load_gltf yet to use u32::MAX, I assume 0 means "might be texture 0 from GLTF".
-                // However, without the u32::MAX logic, collision is inevitable if GLTF has texture 0.
-                // Assuming simple case: offset everything.
-                // Ideally I should assume 0 is "valid texture 0 from GLTF" and map it to `base_tex_id`.
-                // But how to represent "no texture"?
-                //
-                // Wait, I DID update `load_gltf` successfully in Step 154 (via replace_file_content).
-                // But I didn't add the u32::MAX logic there. I just added image loading.
-                // Step 154:
-                // `if let Some(texture_info) = pbr.base_color_texture() { mat = mat.texture(...) }`
-                // `Material::new` sets `tex_id = 0`.
-                // So if default, it is 0.
-                //
-                // If I offset 0, then "No texture" becomes "Texture 2" (which is the first GLTF texture).
-                // This means everything will have the avocado skin texture if I'm not careful.
-                //
-                // I MUST fix `load_gltf` to distinguish "No Texture".
-                // I will assume `tex_id` 0 is "No Texture" (White) IF it wasn't set by GLTF.
-                // But I can't know.
-                //
-                // Hack: In `load_gltf`, `Material::new` sets tex_id=0. I will assume GLTF textures are indices 0..N.
-                // I will modify `load_gltf` NOW to set `mat.tex_id` to `u32::MAX` by default in a separate call?
-                // No, I should do it in `SceneBuilder` logic if possible.
-                //
-                // Better: I will PROPERLY update `load_gltf` first to set default `tex_id = u32::MAX`.
-                // But I can't edit `load_gltf` inside this `replace_file_content`.
-                //
-                // So I will edit `create_avocado_scene` to just print for now, and I will fix `load_gltf` immediately after.
-                // Or I can write the logic here assuming `load_gltf` behaves correctly (returns u32::MAX for no texture),
-                // and then fix `load_gltf`.
-                //
-                // Let's assume `mat.tex_id` IS `u32::MAX` for no texture.
-                //
+                // Base Color
                 if mat.tex_id == u32::MAX {
                     mat.tex_id = 0; // Default White
                 } else {
                     mat.tex_id += base_tex_id;
                 }
+
+                // Normal
+                if mat.normal_tex_id == u32::MAX {
+                    mat.normal_tex_id = 2; // Default Flat Normal
+                } else {
+                    mat.normal_tex_id += base_tex_id;
+                }
+
+                // Occlusion
+                if mat.occlusion_tex_id == u32::MAX {
+                    mat.occlusion_tex_id = 0; // Default White (No occlusion)
+                } else {
+                    mat.occlusion_tex_id += base_tex_id;
+                }
+
+                // Emissive
+                if mat.emissive_tex_id == u32::MAX {
+                    mat.emissive_tex_id = 3; // Default Black (No emission)
+                } else {
+                    mat.emissive_tex_id += base_tex_id;
+                }
+
                 gltf_mats.push(mat);
             }
         }
@@ -385,13 +374,19 @@ pub fn create_avocado_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> Scene
     let mat_floor = builder.add_material(
         Material::new([0.73, 0.73, 0.73, 1.0])
             .roughness(0.99)
-            .texture(0),
+            .texture(0)
+            .normal_texture(2) // Flat
+            .occlusion_texture(0) // White
+            .emissive_texture(3), // Black
     );
     // Light Material (Emissive)
     let mat_light = builder.add_material(
         Material::new([1.0, 1.0, 1.0, 10.0]) // High intensity color
             .light_index(0) // Map to first light
-            .texture(0),
+            .texture(0)
+            .normal_texture(2)
+            .occlusion_texture(0)
+            .emissive_texture(3),
     );
 
     let mut gltf_mat_ids = Vec::new();
@@ -423,6 +418,169 @@ pub fn create_avocado_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> Scene
             mesh_id,
             mat_id,
             Mat4::from_translation(Vec3::new(0.0, 0.0, 0.0)) * Mat4::from_scale(Vec3::splat(20.0)),
+            0x1,
+        );
+    }
+
+    // Light Instance
+    builder.add_instance(
+        light_mesh_id,
+        mat_light,
+        Mat4::from_translation(Vec3::new(0.0, 5.0, 0.0))
+            * Mat4::from_rotation_x(std::f32::consts::PI) // 下向き
+            * Mat4::from_scale(Vec3::splat(1.0)),
+        0x1,
+    );
+
+    // 5. 光源データ
+    builder.add_quad_light(
+        Vec3::new(0.0, 5.0, 0.0).into(),
+        [0.5, 0.0, 0.0], // 少し大きめに
+        [0.0, 0.0, 0.5],
+        [1.0, 1.0, 1.0, 15.0],
+    );
+
+    builder.build(device, queue)
+}
+
+#[allow(dead_code)]
+pub fn create_damaged_helmet_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneResources {
+    let mut builder = SceneBuilder::new();
+
+    // 1. 各ジオメトリの生成
+    let plane_geo = geometry::create_plane_blas(device);
+    // ライト用のジオメトリ (Quad)
+    let light_geo = geometry::create_plane_blas(device);
+
+    let mut gltf_geos = Vec::new();
+    let mut gltf_mats = Vec::new();
+
+    // Avocado読み込み
+    match loader::load_gltf("assets/models/DamagedHelmet.glb", device) {
+        Ok((geos, mats, images)) => {
+            println!(
+                "Loaded DamagedHelmet.glb: {} geometries, {} materials, {} images",
+                geos.len(),
+                mats.len(),
+                images.len()
+            );
+            gltf_geos = geos;
+
+            // Load textures into builder and get the base ID offset
+            // Current textures in builder: 0 (White), 1 (Checker), 2 (Flat Normal), 3 (Black) => next is 4
+            let base_tex_id = builder.textures.len() as u32;
+
+            for img in images {
+                builder.add_texture(img);
+            }
+
+            // Update material texture indices and add to list
+            for mut mat in mats {
+                // Base Color
+                if mat.tex_id == u32::MAX {
+                    mat.tex_id = 0; // Default White
+                } else {
+                    mat.tex_id += base_tex_id;
+                }
+
+                // Normal
+                if mat.normal_tex_id == u32::MAX {
+                    mat.normal_tex_id = 2; // Default Flat Normal
+                } else {
+                    mat.normal_tex_id += base_tex_id;
+                }
+
+                // Occlusion
+                if mat.occlusion_tex_id == u32::MAX {
+                    mat.occlusion_tex_id = 0; // Default White (No occlusion)
+                } else {
+                    mat.occlusion_tex_id += base_tex_id;
+                }
+
+                // Emissive
+                if mat.emissive_tex_id == u32::MAX {
+                    mat.emissive_tex_id = 3; // Default Black (No emission)
+                } else {
+                    mat.emissive_tex_id += base_tex_id;
+                }
+
+                gltf_mats.push(mat);
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to load Avocado.glb: {:?}", e);
+        }
+    }
+
+    // 2. BLAS Build (まとめて実行)
+    // Plane + Light Geometry + GLTF Geometries
+    let mut all_geos = vec![&plane_geo, &light_geo];
+    for geo in &gltf_geos {
+        all_geos.push(geo);
+    }
+    SceneBuilder::build_blases(device, queue, &all_geos);
+
+    // 3. メッシュとマテリアルの登録
+
+    // Plane
+    let plane_id = builder.add_mesh(plane_geo);
+    // Light
+    let light_mesh_id = builder.add_mesh(light_geo);
+
+    // GLTF Meshes
+    let mut gltf_mesh_ids = Vec::new();
+    for geo in gltf_geos {
+        gltf_mesh_ids.push(builder.add_mesh(geo));
+    }
+
+    // Materials
+    let mat_floor = builder.add_material(
+        Material::new([0.73, 0.73, 0.73, 1.0])
+            .roughness(0.99)
+            .texture(0)
+            .normal_texture(2) // Flat
+            .occlusion_texture(0) // White
+            .emissive_texture(3), // Black
+    );
+    // Light Material (Emissive)
+    let mat_light = builder.add_material(
+        Material::new([1.0, 1.0, 1.0, 10.0]) // High intensity color
+            .light_index(0) // Map to first light
+            .texture(0)
+            .normal_texture(2)
+            .occlusion_texture(0)
+            .emissive_texture(3),
+    );
+
+    let mut gltf_mat_ids = Vec::new();
+    for mat in gltf_mats {
+        gltf_mat_ids.push(builder.add_material(mat));
+    }
+
+    // 4. インスタンスの配置
+    // Floor
+    builder.add_instance(
+        plane_id,
+        mat_floor,
+        Mat4::from_translation(Vec3::new(0.0, -1.0, 0.0)) * Mat4::from_scale(Vec3::splat(10.0)),
+        0x1,
+    );
+
+    // Avocado
+    for (i, &mesh_id) in gltf_mesh_ids.iter().enumerate() {
+        // マテリアルIDの対応 (単純に順序通りと仮定)
+        let mat_id = if i < gltf_mat_ids.len() {
+            gltf_mat_ids[i]
+        } else {
+            // マテリアルが不足している場合
+            println!("Material not found for mesh {}", i);
+            0
+        };
+
+        builder.add_instance(
+            mesh_id,
+            mat_id,
+            Mat4::from_translation(Vec3::new(0.0, 0.0, 0.0)) * Mat4::from_scale(Vec3::splat(0.5)),
             0x1,
         );
     }

@@ -55,13 +55,32 @@ pub fn load_gltf(
         let mut mat = Material::new(base_color)
             .metallic(metallic)
             .roughness(roughness)
-            .texture(u32::MAX); // Default to no-texture
+            .texture(u32::MAX) // Default None
+            .normal_texture(u32::MAX)
+            .occlusion_texture(u32::MAX)
+            .emissive_texture(u32::MAX);
 
         if let Some(texture_info) = pbr.base_color_texture() {
-            // Need to offset index by existing textures (2: white + checker)
-            // But here we just return raw index, mapping will happen in scene builder
             mat = mat.texture(texture_info.texture().source().index() as u32);
         }
+
+        if let Some(normal_tex) = material.normal_texture() {
+            mat = mat.normal_texture(normal_tex.texture().source().index() as u32);
+        }
+
+        if let Some(occlusion_tex) = material.occlusion_texture() {
+            mat = mat.occlusion_texture(occlusion_tex.texture().source().index() as u32);
+        }
+
+        if let Some(emissive_tex) = material.emissive_texture() {
+            mat = mat.emissive_texture(emissive_tex.texture().source().index() as u32);
+        }
+
+        // Emissive Factor? glTF has emissiveFactor.
+        // Material struct doesn't have explicit emissiveFactor field yet,
+        // effectively we assume emissive texture * 1.0.
+        // Or we could store it in base_color if light_index >= 0?
+        // For now, let's just respect the map ID.
 
         materials.push(mat);
     }
@@ -102,12 +121,20 @@ pub fn load_gltf(
                 vec![[0.0, 0.0]; positions.len()]
             };
 
+            // Tangents
+            let tangents: Vec<[f32; 4]> = if let Some(iter) = reader.read_tangents() {
+                iter.collect()
+            } else {
+                vec![[1.0, 0.0, 0.0, 1.0]; positions.len()]
+            };
+
             // Assemble VertexAttributes
             for (i, &n) in normals.iter().enumerate() {
                 let encoded_normal = geometry::encode_octahedral_normal(n);
                 attributes.push(VertexAttributes {
                     normal: encoded_normal,
                     uv: uvs.get(i).cloned().unwrap_or([0.0, 0.0]),
+                    tangent: tangents.get(i).cloned().unwrap_or([1.0, 0.0, 0.0, 1.0]),
                 });
             }
 

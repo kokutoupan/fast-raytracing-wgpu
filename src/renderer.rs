@@ -5,12 +5,14 @@ use crate::wgpu_utils::*;
 use bytemuck::{Pod, Zeroable};
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PostParams {
     pub width: u32,
     pub height: u32,
     pub frame_count: u32,
     pub spp: u32,
+    pub jitter: [f32; 2],
+    pub _padding: [f32; 2],
 }
 
 #[repr(C)]
@@ -27,7 +29,7 @@ pub struct RenderTargets {
 
     pub raw_raytrace_texture: wgpu::Texture,
     pub post_processed_texture: wgpu::Texture,
-    pub accumulation_buffer: wgpu::Buffer,
+    pub accumulation_buffers: [wgpu::Buffer; 2],
 
     // --- G-Buffer Textures ---
     pub gbuffer_pos: [wgpu::Texture; 2],
@@ -48,12 +50,15 @@ pub struct RenderTargets {
 
 impl RenderTargets {
     pub fn new(ctx: &WgpuContext, width: u32, height: u32) -> Self {
-        let accumulation_buffer = create_buffer(
-            &ctx.device,
-            "Accumulation Buffer",
-            (width * height * 16) as u64,
-            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        );
+        let create_accum = || {
+            create_buffer(
+                &ctx.device,
+                "Accumulation Buffer",
+                (width * height * 16) as u64,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            )
+        };
+        let accumulation_buffers = [create_accum(), create_accum()];
 
         let raw_raytrace_texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Raw Raytrace Texture"),
@@ -65,7 +70,7 @@ impl RenderTargets {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba32Float,
+            format: wgpu::TextureFormat::Rgba16Float, // Changed to 16Float for filtering
             usage: wgpu::TextureUsages::STORAGE_BINDING
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_DST,
@@ -149,7 +154,7 @@ impl RenderTargets {
             height,
             raw_raytrace_texture,
             post_processed_texture,
-            accumulation_buffer,
+            accumulation_buffers,
             gbuffer_pos,
             gbuffer_normal,
             gbuffer_albedo,
@@ -215,6 +220,8 @@ impl Renderer {
                 height: render_height,
                 frame_count: 0,
                 spp: 2,
+                jitter: [0.0, 0.0],
+                _padding: [0.0, 0.0],
             }],
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
@@ -292,12 +299,13 @@ impl Renderer {
         let post_pass = PostPass::new(
             ctx,
             &targets.raw_view,
-            &targets.accumulation_buffer,
+            &targets.accumulation_buffers,
             &targets.pp_view,
             &post_params_buffer,
             &targets.gbuffer_normal_view,
             &targets.gbuffer_pos_view,
-            &targets.gbuffer_motion_view, // New
+            &targets.gbuffer_motion_view,
+            &sampler, // Pass sampler
         );
 
         let blit_pass = BlitPass::new(ctx, &targets.pp_view, &sampler, &blit_params_buffer);
@@ -346,6 +354,7 @@ impl Renderer {
         _mesh_info_buffer: &wgpu::Buffer,
         _tlas: &wgpu::Tlas,
         light_count: u32,
+        jitter: (f32, f32),
     ) -> Result<(), wgpu::SurfaceError> {
         let mut encoder = ctx
             .device
@@ -360,6 +369,8 @@ impl Renderer {
                 height: self.render_height,
                 frame_count: self.frame_count,
                 spp: 2,
+                jitter: [jitter.0, jitter.1],
+                _padding: [0.0, 0.0],
             }]),
         );
 

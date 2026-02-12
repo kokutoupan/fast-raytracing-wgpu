@@ -9,12 +9,13 @@ impl PostPass {
     pub fn new(
         ctx: &WgpuContext,
         raw_view: &wgpu::TextureView,
-        accumulation_buffer: &wgpu::Buffer,
+        accumulation_buffers: &[wgpu::Buffer; 2],
         pp_view: &wgpu::TextureView,
         params_buffer: &wgpu::Buffer,
         gbuffer_normal_views: &[wgpu::TextureView; 2],
         gbuffer_pos_views: &[wgpu::TextureView; 2],
-        gbuffer_motion: &wgpu::TextureView, // New
+        gbuffer_motion: &wgpu::TextureView,
+        sampler: &wgpu::Sampler, // New Arg
     ) -> Self {
         let shader = ctx
             .device
@@ -29,7 +30,7 @@ impl PostPass {
                         binding: 0,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
                             view_dimension: wgpu::TextureViewDimension::D2,
                             multisampled: false,
                         },
@@ -39,7 +40,7 @@ impl PostPass {
                         binding: 1,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
@@ -87,7 +88,7 @@ impl PostPass {
                         },
                         count: None,
                     },
-                    // Binding 6: Motion (New)
+                    // Binding 6: Motion
                     wgpu::BindGroupLayoutEntry {
                         binding: 6,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -98,27 +99,52 @@ impl PostPass {
                         },
                         count: None,
                     },
+                    // Binding 7: Accumulation
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 8: Sampler
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 8,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
                 ],
             });
 
-        let pipeline =
-            ctx.device
-                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some("Post Pipeline"),
-                    layout: Some(&ctx.device.create_pipeline_layout(
-                        &wgpu::PipelineLayoutDescriptor {
-                            label: None,
-                            bind_group_layouts: &[&bgl],
-                            immediate_size: 0,
-                        },
-                    )),
-                    module: &shader,
-                    entry_point: Some("main"),
-                    compilation_options: Default::default(),
-                    cache: None,
-                });
+        let pipeline_layout = ctx
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Post Pipeline Layout"),
+                bind_group_layouts: &[&bgl],
+                // push_constant_ranges: &[],
+                immediate_size: 0,
+            });
 
-        let create_bg = |label: &str, normal: &wgpu::TextureView, pos: &wgpu::TextureView| {
+        let pipeline = ctx
+            .device
+            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Post Pipeline"),
+                layout: Some(&pipeline_layout),
+                module: &shader,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+
+        let create_bg = |label: &str,
+                         normal: &wgpu::TextureView,
+                         pos: &wgpu::TextureView,
+                         history_buf: &wgpu::Buffer,
+                         output_buf: &wgpu::Buffer| {
             ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(label),
                 layout: &bgl,
@@ -129,7 +155,7 @@ impl PostPass {
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: accumulation_buffer.as_entire_binding(),
+                        resource: history_buf.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
@@ -151,24 +177,36 @@ impl PostPass {
                         binding: 6,
                         resource: wgpu::BindingResource::TextureView(gbuffer_motion),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: output_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
                 ],
             })
         };
 
-        let bg0 = create_bg(
+        let bind_group0 = create_bg(
             "Post Bind Group 0",
             &gbuffer_normal_views[0],
             &gbuffer_pos_views[0],
+            &accumulation_buffers[1], // Read from prev
+            &accumulation_buffers[0], // Write to curr
         );
-        let bg1 = create_bg(
+        let bind_group1 = create_bg(
             "Post Bind Group 1",
             &gbuffer_normal_views[1],
             &gbuffer_pos_views[1],
+            &accumulation_buffers[0], // Read from prev (which was curr)
+            &accumulation_buffers[1], // Write to curr
         );
 
         Self {
             pipeline,
-            bind_groups: [bg0, bg1],
+            bind_groups: [bind_group0, bind_group1],
         }
     }
 

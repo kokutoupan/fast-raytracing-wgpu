@@ -302,10 +302,6 @@ pub fn create_gltf_scene(
     // ライト用のジオメトリ (Quad)
     let light_geo = geometry::create_plane_blas(device);
 
-    let mut gltf_geos = Vec::new();
-    let mut gltf_mats = Vec::new();
-    let mut gltf_material_indices = Vec::new();
-
     // GLTF読み込み
     match loader::load_gltf(file_path, device) {
         Ok((geos, mats, images, gltf_mat_indices)) => {
@@ -316,139 +312,65 @@ pub fn create_gltf_scene(
                 mats.len(),
                 images.len()
             );
-            gltf_geos = geos;
-            gltf_material_indices = gltf_mat_indices;
-
-            // Load textures into builder and get the base ID offset
-            let base_tex_id = builder.textures.len() as u32;
-
-            for img in images {
-                builder.add_texture(img);
+            // 2. BLAS Build
+            let mut all_geos = vec![&plane_geo, &light_geo];
+            for geo in &geos {
+                all_geos.push(geo);
             }
+            SceneBuilder::build_blases(device, queue, &all_geos);
 
-            // Update material texture indices and add to list
-            for mut mat in mats {
-                // Base Color
-                let tex_id = mat.tex_id();
-                if tex_id == 0xFFFF {
-                    mat = mat.texture(0); // Default White
-                } else {
-                    mat = mat.texture(tex_id + base_tex_id);
-                }
+            // 3. Add default meshes/materials and instances
+            // Plane
+            let plane_id = builder.add_mesh(plane_geo);
+            // Light
+            let light_mesh_id = builder.add_mesh(light_geo);
 
-                // Normal
-                let normal_tex_id = mat.normal_tex_id();
-                if normal_tex_id == 0xFFFF {
-                    mat = mat.normal_texture(2); // Default Flat Normal
-                } else {
-                    mat = mat.normal_texture(normal_tex_id + base_tex_id);
-                }
+            // Materials
+            let mat_floor = builder.add_material(
+                Material::new([0.73, 0.73, 0.73, 1.0])
+                    .roughness(0.99)
+                    .texture(0)
+                    .normal_texture(2) // Flat
+                    .occlusion_texture(0) // White
+                    .emissive_texture(3), // Black
+            );
+            let mat_light = builder.add_material(
+                Material::new([1.0, 1.0, 1.0, 1.0]) // High intensity color
+                    .light_index(0) // Map to first light
+                    .texture(0)
+                    .normal_texture(2)
+                    .occlusion_texture(0)
+                    .emissive_factor([10.0, 10.0, 10.0]),
+            );
 
-                // Occlusion
-                let occlusion_tex_id = mat.occlusion_tex_id();
-                if occlusion_tex_id == 0xFFFF {
-                    mat = mat.occlusion_texture(0); // Default White (No occlusion)
-                } else {
-                    mat = mat.occlusion_texture(occlusion_tex_id + base_tex_id);
-                }
+            // Floor Instance
+            builder.add_instance(
+                plane_id,
+                mat_floor,
+                Mat4::from_translation(Vec3::new(0.0, -1.0, 0.0))
+                    * Mat4::from_scale(Vec3::splat(10.0)),
+                0x1,
+            );
 
-                // Emissive
-                let emissive_tex_id = mat.emissive_tex_id();
-                if emissive_tex_id == 0xFFFF {
-                    mat = mat.emissive_texture(3); // Default Black (No emission)
-                } else {
-                    mat = mat.emissive_texture(emissive_tex_id + base_tex_id);
-                }
+            // Light Instance
+            builder.add_instance(light_mesh_id, mat_light, light_transform, 0x1);
 
-                // Metallic Roughness
-                let mr_tex_id = mat.metallic_roughness_tex_id();
-                if mr_tex_id != 0xFFFF {
-                    mat = mat.metallic_roughness_texture(mr_tex_id + base_tex_id);
-                }
+            // 4. Add GLTF Resources
+            let gltf_mat_ids = builder.add_gltf_materials(mats, images);
+            let gltf_mesh_ids = builder.add_gltf_meshes(geos);
 
-                gltf_mats.push(mat);
-            }
+            // 5. Add GLTF Instances
+            builder.add_gltf_instances(
+                &gltf_mesh_ids,
+                &gltf_mat_ids,
+                &gltf_mat_indices,
+                model_transform,
+            );
         }
         Err(e) => {
             eprintln!("Failed to load {}: {:?}", file_path, e);
         }
     }
-
-    // 2. BLAS Build (まとめて実行)
-    // Plane + Light Geometry + GLTF Geometries
-    let mut all_geos = vec![&plane_geo, &light_geo];
-    for geo in &gltf_geos {
-        all_geos.push(geo);
-    }
-    SceneBuilder::build_blases(device, queue, &all_geos);
-
-    // 3. メッシュとマテリアルの登録
-
-    // Plane
-    let plane_id = builder.add_mesh(plane_geo);
-    // Light
-    let light_mesh_id = builder.add_mesh(light_geo);
-
-    // GLTF Meshes
-    let mut gltf_mesh_ids = Vec::new();
-    for geo in gltf_geos {
-        gltf_mesh_ids.push(builder.add_mesh(geo));
-    }
-
-    // Materials
-    let mat_floor = builder.add_material(
-        Material::new([0.73, 0.73, 0.73, 1.0])
-            .roughness(0.99)
-            .texture(0)
-            .normal_texture(2) // Flat
-            .occlusion_texture(0) // White
-            .emissive_texture(3), // Black
-    );
-    // Light Material (Emissive)
-    let mat_light = builder.add_material(
-        Material::new([1.0, 1.0, 1.0, 1.0]) // High intensity color
-            .light_index(0) // Map to first light
-            .texture(0)
-            .normal_texture(2)
-            .occlusion_texture(0)
-            .emissive_factor([10.0, 10.0, 10.0]),
-    );
-
-    let mut gltf_mat_ids = Vec::new();
-    for mat in gltf_mats {
-        gltf_mat_ids.push(builder.add_material(mat));
-    }
-
-    // 4. インスタンスの配置
-    // Floor
-    builder.add_instance(
-        plane_id,
-        mat_floor,
-        Mat4::from_translation(Vec3::new(0.0, -1.0, 0.0)) * Mat4::from_scale(Vec3::splat(10.0)),
-        0x1,
-    );
-
-    // GLTF Instances
-    for (i, &mesh_id) in gltf_mesh_ids.iter().enumerate() {
-        let mat_index = if i < gltf_material_indices.len() {
-            gltf_material_indices[i]
-        } else {
-            eprintln!("Material index out of bounds for mesh {}", i);
-            0
-        };
-
-        let mat_id = if mat_index < gltf_mat_ids.len() {
-            gltf_mat_ids[mat_index]
-        } else {
-            eprintln!("Material index out of bounds for mesh {}", i);
-            0 // Default fallback
-        };
-
-        builder.add_instance(mesh_id, mat_id, model_transform, 0x1);
-    }
-
-    // Light Instance
-    builder.add_instance(light_mesh_id, mat_light, light_transform, 0x1);
 
     // 5. 光源データ
     builder.add_quad_light(

@@ -152,6 +152,98 @@ impl SceneBuilder {
         self.instances.push(Some(instance));
     }
 
+    pub fn add_gltf_materials(
+        &mut self,
+        materials: Vec<Material>,
+        images: Vec<DynamicImage>,
+    ) -> Vec<u32> {
+        // Load textures into builder and get the base ID offset
+        let base_tex_id = self.textures.len() as u32;
+
+        for img in images {
+            self.add_texture(img);
+        }
+
+        let mut gltf_mat_ids = Vec::new();
+        for mut mat in materials {
+            // Update material texture indices and add to list
+            // Base Color
+            let tex_id = mat.tex_id();
+            if tex_id == 0xFFFF {
+                mat = mat.texture(0); // Default White
+            } else {
+                mat = mat.texture(tex_id + base_tex_id);
+            }
+
+            // Normal
+            let normal_tex_id = mat.normal_tex_id();
+            if normal_tex_id == 0xFFFF {
+                mat = mat.normal_texture(2); // Default Flat Normal
+            } else {
+                mat = mat.normal_texture(normal_tex_id + base_tex_id);
+            }
+
+            // Occlusion
+            let occlusion_tex_id = mat.occlusion_tex_id();
+            if occlusion_tex_id == 0xFFFF {
+                mat = mat.occlusion_texture(0); // Default White (No occlusion)
+            } else {
+                mat = mat.occlusion_texture(occlusion_tex_id + base_tex_id);
+            }
+
+            // Emissive
+            let emissive_tex_id = mat.emissive_tex_id();
+            if emissive_tex_id == 0xFFFF {
+                mat = mat.emissive_texture(3); // Default Black (No emission)
+            } else {
+                mat = mat.emissive_texture(emissive_tex_id + base_tex_id);
+            }
+
+            // Metallic Roughness
+            let mr_tex_id = mat.metallic_roughness_tex_id();
+            if mr_tex_id != 0xFFFF {
+                mat = mat.metallic_roughness_texture(mr_tex_id + base_tex_id);
+            }
+
+            gltf_mat_ids.push(self.add_material(mat));
+        }
+        gltf_mat_ids
+    }
+
+    pub fn add_gltf_meshes(&mut self, geometries: Vec<geometry::Geometry>) -> Vec<u32> {
+        let mut ids = Vec::new();
+        for geo in geometries {
+            ids.push(self.add_mesh(geo));
+        }
+        ids
+    }
+
+    pub fn add_gltf_instances(
+        &mut self,
+        mesh_ids: &[u32],
+        mat_ids: &[u32],
+        material_indices: &[usize],
+        transform: Mat4,
+    ) {
+        for (i, &mesh_id) in mesh_ids.iter().enumerate() {
+            let mat_index = if i < material_indices.len() {
+                material_indices[i]
+            } else {
+                eprintln!("Material index out of bounds for mesh {}", i);
+                0
+            };
+
+            let mat_id = if mat_index < mat_ids.len() {
+                mat_ids[mat_index]
+            } else {
+                eprintln!("Material ID out of bounds for mesh {}", i);
+                0 // Default fallback
+            };
+
+            self.add_instance(mesh_id, mat_id, transform, 0x1);
+        }
+    }
+
     /// 矩形ライトを追加する
     /// - position: 中心座標
     /// - u: 中心から「右端」へのベクトル（向きと長さ = 幅の半分）

@@ -29,12 +29,6 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     let crystal_id = builder.add_mesh(crystal_geo);
 
     // マテリアル定義
-    let mat_light = builder.add_material(
-        Material::new([0.0, 0.0, 0.0, 1.0])
-            .light_index(0)
-            .emissive_factor([10.0, 10.0, 10.0]) // Quad Light Emission [1.0, 1.0, 1.0] * 10.0
-            .texture(0),
-    );
     let mat_red = builder.add_material(Material::new([0.65, 0.05, 0.05, 1.0]).texture(0));
     let mat_green = builder.add_material(Material::new([0.12, 0.45, 0.15, 1.0]).texture(0));
     let mat_white = builder.add_material(Material::new([0.73, 0.73, 0.73, 1.0]).texture(0));
@@ -46,14 +40,6 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     let mat_rough_metal = builder.add_material(
         Material::new([0.8, 0.8, 0.8, 1.0])
             .metallic(0.01)
-            .texture(0),
-    );
-
-    // 追加: 球体ライト (強い発光)
-    let mat_sphere_light = builder.add_material(
-        Material::new([1.0, 1.0, 1.0, 1.0])
-            .light_index(1) // 球体ライトのインデックス
-            .emissive_factor([0.2, 0.2, 9.0]) // Sphere Light Emission [0.02, 0.02, 0.9] * 10.0
             .texture(0),
     );
 
@@ -109,20 +95,13 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
         0x1,
     );
     // Main Light (Ceiling)
-    builder.add_instance(
+    builder.register_quad_light(
         plane_id,
-        mat_light,
         Mat4::from_translation(Vec3::new(0.0, 0.99, 0.0))
             * Mat4::from_rotation_x(std::f32::consts::PI)
             * Mat4::from_scale(Vec3::splat(0.5)),
-        0x1,
-    );
-    // Main Light:Light info
-    builder.add_quad_light(
-        Vec3::new(0.0, 0.99, 0.0).into(),
-        [0.25, 0.0, 0.0],
-        [0.0, 0.0, 0.25],
-        [1.0, 1.0, 1.0, 10.0],
+        [1.0, 1.0, 1.0], // Color
+        10.0,
     );
 
     // クリスタル (正八面体) - ガラス球のあった場所に移動し拡大
@@ -134,18 +113,12 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
         0x1,
     );
 
-    // クリスタル内部の光
-    builder.add_instance(
+    // クリスタル内部の光 (Sphere Light)
+    builder.register_sphere_light(
         sphere_id,
-        mat_sphere_light,
         Mat4::from_translation(crystal_pos) * Mat4::from_scale(Vec3::splat(0.1)),
-        0x1,
-    );
-    // 球体光源の情報
-    builder.add_sphere_light(
-        Vec3::new(0.4, -0.5, 0.3).into(),
-        0.1,
-        [0.02, 0.02, 0.9, 10.0],
+        [0.02, 0.02, 0.9],
+        10.0,
     );
 
     // Tall Box (Rough Metal)
@@ -334,15 +307,6 @@ pub fn create_gltf_scene(
                     .occlusion_texture(0) // White
                     .emissive_texture(3), // Black
             );
-            let mat_light = builder.add_material(
-                Material::new([1.0, 1.0, 1.0, 1.0]) // High intensity color
-                    .light_index(0) // Map to first light
-                    .texture(0)
-                    .normal_texture(2)
-                    .occlusion_texture(0)
-                    .emissive_factor([10.0, 10.0, 10.0]),
-            );
-
             // Floor Instance
             builder.add_instance(
                 plane_id,
@@ -352,8 +316,8 @@ pub fn create_gltf_scene(
                 0x1,
             );
 
-            // Light Instance
-            builder.add_instance(light_mesh_id, mat_light, light_transform, 0x1);
+            // Light Instance and Data
+            builder.register_quad_light(light_mesh_id, light_transform, [1.0, 1.0, 1.0], 15.0);
 
             // 4. Add GLTF Resources
             let gltf_mat_ids = builder.add_gltf_materials(mats, images);
@@ -371,14 +335,6 @@ pub fn create_gltf_scene(
             eprintln!("Failed to load {}: {:?}", file_path, e);
         }
     }
-
-    // 5. 光源データ
-    builder.add_quad_light(
-        light_transform.to_scale_rotation_translation().2.into(), // Use translation from transform
-        [0.5, 0.0, 0.0],
-        [0.0, 0.0, 0.5],
-        [1.0, 1.0, 1.0, 15.0],
-    );
 
     builder.build(device, queue)
 }

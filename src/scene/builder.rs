@@ -244,6 +244,75 @@ impl SceneBuilder {
         }
     }
 
+    pub fn register_quad_light(
+        &mut self,
+        mesh_id: u32,
+        transform: Mat4,
+        color: [f32; 3],
+        intensity: f32,
+    ) {
+        // 1. Calculate emission
+        let emission_factor = [
+            color[0] * intensity,
+            color[1] * intensity,
+            color[2] * intensity,
+        ];
+
+        // 2. Create Material
+        let mat_id = self.add_material(
+            Material::new([1.0, 1.0, 1.0, 1.0])
+                .light_index(self.lights.len() as i32)
+                .emissive_factor(emission_factor)
+                .texture(0), // Default White
+        );
+
+        // 3. Add Instance
+        self.add_instance(mesh_id, mat_id, transform, 0x1);
+
+        // 4. Register Light Uniform (NEE)
+        let position: [f32; 3] = transform.w_axis.truncate().into();
+
+        // Plane BLAS is 1x1 (-0.5 to 0.5), so "radius" is 0.5
+        let u = (transform.transform_vector3(Vec3::X) * 0.5).into();
+        let v = (transform.transform_vector3(Vec3::NEG_Z) * 0.5).into();
+
+        self.add_quad_light(position, u, v, [color[0], color[1], color[2], intensity]);
+    }
+
+    pub fn register_sphere_light(
+        &mut self,
+        mesh_id: u32,
+        transform: Mat4,
+        color: [f32; 3],
+        intensity: f32,
+    ) {
+        let emission_factor = [
+            color[0] * intensity,
+            color[1] * intensity,
+            color[2] * intensity,
+        ];
+
+        let mat_id = self.add_material(
+            Material::new([1.0, 1.0, 1.0, 1.0])
+                .light_index(self.lights.len() as i32)
+                .emissive_factor(emission_factor)
+                .texture(0),
+        );
+
+        self.add_instance(mesh_id, mat_id, transform, 0x1);
+
+        let position: [f32; 3] = transform.w_axis.truncate().into();
+        // Sphere BLAS is radius 0.5 (diameter 1.0)
+        let scale = transform.transform_vector3(Vec3::X).length();
+        let real_radius = scale * 0.5;
+
+        self.add_sphere_light(
+            position,
+            real_radius,
+            [color[0], color[1], color[2], intensity],
+        );
+    }
+
     /// 矩形ライトを追加する
     /// - position: 中心座標
     /// - u: 中心から「右端」へのベクトル（向きと長さ = 幅の半分）

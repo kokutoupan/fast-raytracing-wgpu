@@ -1,9 +1,10 @@
 @group(0) @binding(0) var raw_tex: texture_2d<f32>;
-@group(0) @binding(1) var<storage, read_write> accumulation: array<vec4f>;
+@group(0) @binding(1) var<storage, read> history: array<vec4f>;
 @group(0) @binding(2) var out_tex: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(3) var normal_tex: texture_2d<f32>;
 @group(0) @binding(4) var pos_tex: texture_2d<f32>;
 @group(0) @binding(6) var motion_tex: texture_2d<f32>; // New Binding
+@group(0) @binding(7) var<storage, read_write> accumulation: array<vec4f>; // New Binding
 
 
 struct PostParams {
@@ -27,6 +28,29 @@ fn decode_octahedral_normal(e: vec2f) -> vec3f {
     n.x += select(t, -t, n.x >= 0.0);
     n.y += select(t, -t, n.y >= 0.0);
     return normalize(n);
+}
+
+fn rgb_to_ycocg(rgb: vec3f) -> vec3f {
+    let y = dot(rgb, vec3f(0.25, 0.5, 0.25));
+    let co = dot(rgb, vec3f(0.5, 0.0, -0.5));
+    let cg = dot(rgb, vec3f(-0.25, 0.5, -0.25));
+    return vec3f(y, co, cg);
+}
+
+fn ycocg_to_rgb(ycocg: vec3f) -> vec3f {
+    let y = ycocg.x;
+    let co = ycocg.y;
+    let cg = ycocg.z;
+    return vec3f(y + co - cg, y + cg, y - co - cg);
+}
+
+// --- Helper for Reversible Tonemap ---
+fn resolve_tonemap(c: vec3f) -> vec3f {
+    return c / (1.0 + max(c.r, max(c.g, c.b)));
+}
+
+fn resolve_inverse_tonemap(c: vec3f) -> vec3f {
+    return c / (1.0 - max(c.r, max(c.g, c.b)));
 }
 
 @compute @workgroup_size(8, 8)
@@ -97,64 +121,121 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     }
 
     // --- TAA (Reprojection) ---
-    // Calculate Mean/Min/Max of 3x3 neighborhood for clamping
-    var c_min = vec3f(1.0e20);
-    var c_max = vec3f(-1.0e20);
-    var c_avg = vec3f(0.0);
-    var count = 0.0;
 
+    // 2. Neighborhood Sampling (3x3) & AABB Calculation in YCoCg
+    
+    // Sample accumulated color? No, we filter the raw frame first (filtered_color).
+    // We want to constrain history to the CURRENT frame's neighborhood.
+    // 3. Neighborhood Sampling (Variance Clipping)
+    var m1 = vec3f(0.0);
+    var m2 = vec3f(0.0);
+    
+    // Tonemap center (filtered_color is HDR)
+    let tm_filtered = resolve_tonemap(filtered_color);
+    
     for (var dy = -1; dy <= 1; dy++) {
         for (var dx = -1; dx <= 1; dx++) {
-            let offset = vec2i(dx, dy);
-            let s_coords = vec2i(coords) + offset;
-            if s_coords.x >= 0 && s_coords.y >= 0 && s_coords.x < i32(params.width) && s_coords.y < i32(params.height) {
-                let s_col = textureLoad(raw_tex, s_coords, 0).rgb;
-                c_min = min(c_min, s_col);
-                c_max = max(c_max, s_col);
-                c_avg += s_col;
-                count += 1.0;
-            }
+             let neighbor_coords = vec2i(coords) + vec2i(dx, dy);
+             var s_col = vec3f(0.0);
+             if neighbor_coords.x >= 0 && neighbor_coords.y >= 0 && neighbor_coords.x < i32(params.width) && neighbor_coords.y < i32(params.height) {
+                 s_col = textureLoad(raw_tex, neighbor_coords, 0).rgb;
+             } else {
+                 s_col = filtered_color;
+             }
+             
+             // Tonemap neighbor
+             let s_tm = resolve_tonemap(s_col);
+             let s_ycocg = rgb_to_ycocg(s_tm);
+             
+             m1 += s_ycocg;
+             m2 += s_ycocg * s_ycocg;
         }
     }
-    c_avg /= count;
+    m1 /= 9.0;
+    m2 /= 9.0;
 
-    // Temporal Reuse
-    var history_color = filtered_color;
+    let sigma = sqrt(max(vec3f(0.0), m2 - m1 * m1));
+    let gamma = 1.25; // Slightly deeper box
+    let c_min = m1 - gamma * sigma;
+    let c_max = m1 + gamma * sigma;
+    let c_avg = m1; 
+
+    // 3. History Sampling & Reprojection
+    var history_color = tm_filtered; // Use Tonemapped filtered as default
     var valid_history = false;
+    let blend_factor_base = 0.9;
+    var blend_factor = blend_factor_base;
+    var structure_motion = vec2f(0.0);
 
     if params.frame_count > 0u {
-        let motion = textureLoad(motion_tex, coords, 0).xy;
+        structure_motion = textureLoad(motion_tex, coords, 0).xy;
+
         let uv = (vec2f(coords) + 0.5) / vec2f(f32(params.width), f32(params.height));
-        let prev_uv = uv + motion;
-        let prev_coords = vec2i(prev_uv * vec2f(f32(params.width), f32(params.height)) - 0.5);
+        let prev_uv = uv + structure_motion; 
 
-        if prev_coords.x >= 0 && prev_coords.y >= 0 && prev_coords.x < i32(params.width) && prev_coords.y < i32(params.height) {
-            let prev_idx = u32(prev_coords.y) * params.width + u32(prev_coords.x);
-            let hist_val = accumulation[prev_idx];
-            // history stores (accumulated_color, sample_count). 
-            // We want the average color for TAA history. 
-            // Previous implementation stored SUM. 
-            // NOW we store the filtered color directly (last frame's result).
+        let prev_pos = prev_uv * vec2f(f32(params.width), f32(params.height)) - 0.5;
+        // ... (Code continues below)
 
-            history_color = hist_val.rgb;
-            valid_history = true;
+        let p0 = vec2i(floor(prev_pos));
+        let p1 = p0 + vec2i(1, 0);
+        let p2 = p0 + vec2i(0, 1);
+        let p3 = p0 + vec2i(1, 1);
+
+        let f = fract(prev_pos);
+
+        if prev_uv.x >= 0.0 && prev_uv.y >= 0.0 && prev_uv.x <= 1.0 && prev_uv.y <= 1.0 {
+             let idx0 = u32(p0.y) * params.width + u32(p0.x);
+             let idx1 = u32(p1.y) * params.width + u32(p1.x);
+             let idx2 = u32(p2.y) * params.width + u32(p2.x);
+             let idx3 = u32(p3.y) * params.width + u32(p3.x);
+
+             var c0 = vec3f(0.0);
+             var c1 = vec3f(0.0);
+             var c2 = vec3f(0.0);
+             var c3 = vec3f(0.0);
+
+             // History is already Tonemapped?
+             // NO! The accumulation buffer stores the RESULT of the previous frame.
+             // If we Inverse Tonemap at the end of this shader, the history (read from accumulation) is linear HDR.
+             // So we must Tonemap the history sample too.
+             
+             if p0.x >= 0 && p0.y >= 0 && p0.x < i32(params.width) && p0.y < i32(params.height) { c0 = resolve_tonemap(history[idx0].rgb); }
+             if p1.x >= 0 && p1.y >= 0 && p1.x < i32(params.width) && p1.y < i32(params.height) { c1 = resolve_tonemap(history[idx1].rgb); }
+             if p2.x >= 0 && p2.y >= 0 && p2.x < i32(params.width) && p2.y < i32(params.height) { c2 = resolve_tonemap(history[idx2].rgb); }
+             if p3.x >= 0 && p3.y >= 0 && p3.x < i32(params.width) && p3.y < i32(params.height) { c3 = resolve_tonemap(history[idx3].rgb); }
+
+              let c01 = mix(c0, c1, f.x);
+              let c23 = mix(c2, c3, f.x);
+              history_color = mix(c01, c23, f.y);
+              valid_history = true;
         }
     }
 
-    var final_color = filtered_color;
+    // We work in Tonemapped space now
+    var final_tm = tm_filtered;
 
     if valid_history {
-        // Clamp History (Simple AABB)
-        let clamped_history = clamp(history_color, c_min, c_max);
-
-        let blend_factor = 0.9; // 90% history, 10% new
-        final_color = mix(final_color, clamped_history, blend_factor);
+        // 4. History Rectification (Variance Clipping) - In Tonemapped Space
+        let hist_ycocg = rgb_to_ycocg(history_color);
+        
+        let clipped_ycocg = clamp(hist_ycocg, c_min, c_max);
+        
+        let clamped_history = ycocg_to_rgb(clipped_ycocg);
+        
+        // Feedback
+        final_tm = mix(tm_filtered, clamped_history, blend_factor);
     }
     
-    // Store result in accumulation buffer for next frame
+    // Inverse Tonemap to get back to Linear HDR
+    var final_color = resolve_inverse_tonemap(final_tm);
+    final_color = max(vec3f(0.0), final_color); // Safety
+    
+
+
+    // Store result
     accumulation[idx] = vec4f(final_color, 1.0);
 
-    // Gamma correction (Manual)
+    // Gamma correction
     let display_color = pow(final_color, vec3f(1.0 / 2.2));
 
     textureStore(out_tex, vec2i(coords), vec4f(display_color, 1.0));

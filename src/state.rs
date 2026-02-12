@@ -48,15 +48,16 @@ impl State {
 
         // 2. シーン構築
         // let scene_resources = scene::scenes::create_restir_scene(&ctx.device, &ctx.queue);
-        let scene_resources = scene::scenes::create_cornell_box(&ctx.device, &ctx.queue);
+        // let scene_resources = scene::scenes::create_cornell_box(&ctx.device, &ctx.queue);
         // let scene_resources = scene::scenes::create_avocado_scene(&ctx.device, &ctx.queue);
-        // let scene_resources = scene::scenes::create_damaged_helmet_scene(&ctx.device, &ctx.queue);
+        let scene_resources = scene::scenes::create_damaged_helmet_scene(&ctx.device, &ctx.queue);
         // let scene_resources =
         //     scene::scenes::create_multi_material_model_scene(&ctx.device, &ctx.queue);
 
         // 3. カメラ初期化 (最初はデフォルトのアスペクト比で初期化)
         let camera_controller = CameraController::new();
-        let camera_uniform = camera_controller.build_uniform(1.0, 0, scene_resources.num_lights);
+        let (camera_uniform, _) =
+            camera_controller.build_uniform(1.0, 0, scene_resources.num_lights, (0.0, 0.0));
 
         let camera_buffer = create_buffer_init(
             &ctx.device,
@@ -76,8 +77,12 @@ impl State {
         );
 
         // レンダラーのアスペクト比を使ってカメラユニフォームを更新
-        let camera_uniform =
-            camera_controller.build_uniform(renderer.aspect_ratio(), 0, scene_resources.num_lights);
+        let (camera_uniform, _) = camera_controller.build_uniform(
+            renderer.aspect_ratio(),
+            0,
+            scene_resources.num_lights,
+            (0.0, 0.0),
+        );
         ctx.queue
             .write_buffer(&camera_buffer, 0, bytemuck::cast_slice(&[camera_uniform]));
 
@@ -143,15 +148,23 @@ impl State {
             self.renderer.frame_count = 0;
         }
 
-        let camera_uniform = self.camera_controller.build_uniform(
+        // Jitter Calculation for TAA
+        let jitter = crate::camera::CameraController::get_halton_jitter(
+            self.renderer.frame_count,
+            self.renderer.render_width,
+            self.renderer.render_height,
+        );
+
+        let (camera_uniform, unjittered_view_proj) = self.camera_controller.build_uniform(
             self.renderer.aspect_ratio(),
             self.renderer.frame_count,
             self.scene_resources.num_lights,
+            jitter,
         );
 
         // Start Step 182 changes: Update prev_view_proj for the next frame
         use glam::Mat4;
-        self.camera_controller.prev_view_proj = Mat4::from_cols_array_2d(&camera_uniform.view_proj);
+        self.camera_controller.prev_view_proj = Mat4::from_cols_array_2d(&unjittered_view_proj);
         // End Step 182 changes
 
         self.ctx.queue.write_buffer(

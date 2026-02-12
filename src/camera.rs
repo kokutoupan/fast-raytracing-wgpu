@@ -179,33 +179,80 @@ impl CameraController {
         moved
     }
 
-    pub fn build_uniform(&self, aspect: f32, frame_count: u32, num_lights: u32) -> CameraUniform {
+    pub fn get_halton_jitter(index: u32, width: u32, height: u32) -> (f32, f32) {
+        fn halton(mut i: u32, base: u32) -> f32 {
+            let mut f = 1.0;
+            let mut r = 0.0;
+            while i > 0 {
+                f /= base as f32;
+                r += f * (i % base) as f32;
+                i /= base;
+            }
+            r
+        }
+
+        // 8-phase Halton sequence is usually enough for TAA
+        let idx = index;
+        let halton_x = halton(idx + 1, 2) - 0.5;
+        let halton_y = halton(idx + 1, 3) - 0.5;
+
+        // Scale by pixel size to get NDC offset
+        // NDC is [-1, 1], so pixel size is 2.0 / size
+        // Reducing jitter scale to 0.5 pixels (Factor 1.0 instead of 2.0)
+        (
+            (halton_x * 1.0) / width as f32,
+            (halton_y * 1.0) / height as f32,
+        )
+    }
+
+    pub fn build_uniform(
+        &self,
+        aspect: f32,
+        frame_count: u32,
+        num_lights: u32,
+        jitter: (f32, f32),
+    ) -> (CameraUniform, [[f32; 4]; 4]) {
         let (sin_y, cos_y) = self.yaw.sin_cos();
         let (sin_p, cos_p) = self.pitch.sin_cos();
         let forward = Vec3::new(cos_p * cos_y, sin_p, cos_p * sin_y).normalize();
 
         let view = Mat4::look_at_rh(self.position, self.position + forward, Vec3::Y);
-        let proj = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 100.0);
+        let proj_base = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 100.0);
 
-        // 現在のViewProjection行列
+        // Calculate Unjittered ViewProj
+        let view_proj_unjittered = proj_base * view;
+
+        // Apply Jitter to Projection Matrix (Shear)
+        let mut proj_cols = proj_base.to_cols_array_2d();
+        proj_cols[2][0] += jitter.0;
+        proj_cols[2][1] += jitter.1;
+        let proj = Mat4::from_cols_array_2d(&proj_cols);
+
+        // 現在のViewProjection行列 (Jittered)
         let view_proj = proj * view;
 
         // 初回のみ Identity なので防ぐ
         let prev_view_proj = if self.prev_view_proj == Mat4::IDENTITY {
-            view_proj
+            view_proj_unjittered
         } else {
             self.prev_view_proj
         };
 
-        CameraUniform {
-            view_proj: view_proj.to_cols_array_2d(),
-            view_inverse: view.inverse().to_cols_array_2d(),
-            proj_inverse: proj.inverse().to_cols_array_2d(),
-            view_pos: [self.position.x, self.position.y, self.position.z, 1.0],
-            prev_view_proj: prev_view_proj.to_cols_array_2d(),
-            frame_count,
-            num_lights,
-            _padding: [0; 2],
-        }
+        // We send `prev_view_proj` (Unjittered N-1) to shader.
+        // We use `view_proj` (Jittered N) for current frame rendering.
+
+        (
+            CameraUniform {
+                view_proj: view_proj.to_cols_array_2d(),
+                view_inverse: view.inverse().to_cols_array_2d(),
+                proj_inverse: proj.inverse().to_cols_array_2d(),
+                view_pos: [self.position.x, self.position.y, self.position.z, 1.0],
+                prev_view_proj: prev_view_proj.to_cols_array_2d(),
+                frame_count,
+                num_lights,
+                _padding: [0; 2],
+            },
+            view_proj_unjittered.to_cols_array_2d(),
+        )
     }
 }

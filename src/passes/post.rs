@@ -9,7 +9,7 @@ impl PostPass {
     pub fn new(
         ctx: &WgpuContext,
         raw_view: &wgpu::TextureView,
-        accumulation_buffer: &wgpu::Buffer,
+        accumulation_buffers: &[wgpu::Buffer; 2],
         pp_view: &wgpu::TextureView,
         params_buffer: &wgpu::Buffer,
         gbuffer_normal_views: &[wgpu::TextureView; 2],
@@ -39,7 +39,7 @@ impl PostPass {
                         binding: 1,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
@@ -98,6 +98,17 @@ impl PostPass {
                         },
                         count: None,
                     },
+                    // Binding 7: Accumulation Output (New, WriteOnly)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -118,7 +129,11 @@ impl PostPass {
                     cache: None,
                 });
 
-        let create_bg = |label: &str, normal: &wgpu::TextureView, pos: &wgpu::TextureView| {
+        let create_bg = |label: &str,
+                         normal: &wgpu::TextureView,
+                         pos: &wgpu::TextureView,
+                         history_buf: &wgpu::Buffer,
+                         output_buf: &wgpu::Buffer| {
             ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(label),
                 layout: &bgl,
@@ -129,7 +144,7 @@ impl PostPass {
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: accumulation_buffer.as_entire_binding(),
+                        resource: history_buf.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
@@ -151,19 +166,29 @@ impl PostPass {
                         binding: 6,
                         resource: wgpu::BindingResource::TextureView(gbuffer_motion),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: output_buf.as_entire_binding(),
+                    },
                 ],
             })
         };
 
+        // Frame 0: Read from Buf[1], Write to Buf[0]
         let bg0 = create_bg(
             "Post Bind Group 0",
             &gbuffer_normal_views[0],
             &gbuffer_pos_views[0],
+            &accumulation_buffers[1], // History
+            &accumulation_buffers[0], // Output
         );
+        // Frame 1: Read from Buf[0], Write to Buf[1]
         let bg1 = create_bg(
             "Post Bind Group 1",
             &gbuffer_normal_views[1],
             &gbuffer_pos_views[1],
+            &accumulation_buffers[0], // History
+            &accumulation_buffers[1], // Output
         );
 
         Self {

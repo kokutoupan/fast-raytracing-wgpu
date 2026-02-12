@@ -27,7 +27,7 @@ pub struct RenderTargets {
 
     pub raw_raytrace_texture: wgpu::Texture,
     pub post_processed_texture: wgpu::Texture,
-    pub accumulation_buffer: wgpu::Buffer,
+    pub accumulation_buffers: [wgpu::Buffer; 2],
 
     // --- G-Buffer Textures ---
     pub gbuffer_pos: [wgpu::Texture; 2],
@@ -48,12 +48,15 @@ pub struct RenderTargets {
 
 impl RenderTargets {
     pub fn new(ctx: &WgpuContext, width: u32, height: u32) -> Self {
-        let accumulation_buffer = create_buffer(
-            &ctx.device,
-            "Accumulation Buffer",
-            (width * height * 16) as u64,
-            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        );
+        let create_accum = || {
+            create_buffer(
+                &ctx.device,
+                "Accumulation Buffer",
+                (width * height * 16) as u64,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            )
+        };
+        let accumulation_buffers = [create_accum(), create_accum()];
 
         let raw_raytrace_texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Raw Raytrace Texture"),
@@ -149,7 +152,7 @@ impl RenderTargets {
             height,
             raw_raytrace_texture,
             post_processed_texture,
-            accumulation_buffer,
+            accumulation_buffers,
             gbuffer_pos,
             gbuffer_normal,
             gbuffer_albedo,
@@ -292,7 +295,7 @@ impl Renderer {
         let post_pass = PostPass::new(
             ctx,
             &targets.raw_view,
-            &targets.accumulation_buffer,
+            &targets.accumulation_buffers,
             &targets.pp_view,
             &post_params_buffer,
             &targets.gbuffer_normal_view,

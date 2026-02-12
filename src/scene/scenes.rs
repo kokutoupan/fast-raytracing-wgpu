@@ -288,7 +288,13 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
 }
 
 #[allow(dead_code)]
-pub fn create_avocado_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneResources {
+pub fn create_gltf_scene(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    file_path: &str,
+    model_transform: Mat4,
+    light_transform: Mat4,
+) -> SceneResources {
     let mut builder = SceneBuilder::new();
 
     // 1. 各ジオメトリの生成
@@ -299,11 +305,12 @@ pub fn create_avocado_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> Scene
     let mut gltf_geos = Vec::new();
     let mut gltf_mats = Vec::new();
 
-    // Avocado読み込み
-    match loader::load_gltf("assets/models/Avocado.glb", device) {
+    // GLTF読み込み
+    match loader::load_gltf(file_path, device) {
         Ok((geos, mats, images)) => {
             println!(
-                "Loaded Avocado.glb: {} geometries, {} materials, {} images",
+                "Loaded {}: {} geometries, {} materials, {} images",
+                file_path,
                 geos.len(),
                 mats.len(),
                 images.len()
@@ -311,7 +318,6 @@ pub fn create_avocado_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> Scene
             gltf_geos = geos;
 
             // Load textures into builder and get the base ID offset
-            // Current textures in builder: 0 (White), 1 (Checker), 2 (Flat Normal), 3 (Black) => next is 4
             let base_tex_id = builder.textures.len() as u32;
 
             for img in images {
@@ -323,7 +329,6 @@ pub fn create_avocado_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> Scene
                 // Base Color
                 let tex_id = mat.tex_id();
                 if tex_id == 0xFFFF {
-                    // u16::MAX check
                     mat = mat.texture(0); // Default White
                 } else {
                     mat = mat.texture(tex_id + base_tex_id);
@@ -363,7 +368,7 @@ pub fn create_avocado_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> Scene
             }
         }
         Err(e) => {
-            eprintln!("Failed to load Avocado.glb: {:?}", e);
+            eprintln!("Failed to load {}: {:?}", file_path, e);
         }
     }
 
@@ -421,39 +426,25 @@ pub fn create_avocado_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> Scene
         0x1,
     );
 
-    // Avocado
+    // GLTF Instances
     for (i, &mesh_id) in gltf_mesh_ids.iter().enumerate() {
-        // マテリアルIDの対応 (単純に順序通りと仮定)
         let mat_id = if i < gltf_mat_ids.len() {
             gltf_mat_ids[i]
         } else {
-            // マテリアルが不足している場合
-            println!("Material not found for mesh {}", i);
-            0
+            eprintln!("Material not found for mesh {}", i);
+            0 // Default fallback
         };
 
-        builder.add_instance(
-            mesh_id,
-            mat_id,
-            Mat4::from_translation(Vec3::new(0.0, 0.0, 0.0)) * Mat4::from_scale(Vec3::splat(20.0)),
-            0x1,
-        );
+        builder.add_instance(mesh_id, mat_id, model_transform, 0x1);
     }
 
     // Light Instance
-    builder.add_instance(
-        light_mesh_id,
-        mat_light,
-        Mat4::from_translation(Vec3::new(0.0, 5.0, 0.0))
-            * Mat4::from_rotation_x(std::f32::consts::PI) // 下向き
-            * Mat4::from_scale(Vec3::splat(1.0)),
-        0x1,
-    );
+    builder.add_instance(light_mesh_id, mat_light, light_transform, 0x1);
 
     // 5. 光源データ
     builder.add_quad_light(
-        Vec3::new(0.0, 5.0, 0.0).into(),
-        [0.5, 0.0, 0.0], // 少し大きめに
+        light_transform.to_scale_rotation_translation().2.into(), // Use translation from transform
+        [0.5, 0.0, 0.0],
         [0.0, 0.0, 0.5],
         [1.0, 1.0, 1.0, 15.0],
     );
@@ -462,179 +453,47 @@ pub fn create_avocado_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> Scene
 }
 
 #[allow(dead_code)]
-pub fn create_damaged_helmet_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneResources {
-    let mut builder = SceneBuilder::new();
-
-    // 1. 各ジオメトリの生成
-    let plane_geo = geometry::create_plane_blas(device);
-    // ライト用のジオメトリ (Quad)
-    let light_geo = geometry::create_plane_blas(device);
-
-    let mut gltf_geos = Vec::new();
-    let mut gltf_mats = Vec::new();
-
-    // Avocado読み込み
-    match loader::load_gltf("assets/models/DamagedHelmet.glb", device) {
-        Ok((geos, mats, images)) => {
-            println!(
-                "Loaded DamagedHelmet.glb: {} geometries, {} materials, {} images",
-                geos.len(),
-                mats.len(),
-                images.len()
-            );
-            gltf_geos = geos;
-
-            // Load textures into builder and get the base ID offset
-            // Current textures in builder: 0 (White), 1 (Checker), 2 (Flat Normal), 3 (Black) => next is 4
-            let base_tex_id = builder.textures.len() as u32;
-
-            for img in images {
-                builder.add_texture(img);
-            }
-
-            // Update material texture indices and add to list
-            // Update material texture indices and add to list
-            for mut mat in mats {
-                // Base Color
-                let tex_id = mat.tex_id();
-                if tex_id == 0xFFFF {
-                    mat = mat.texture(0); // Default White
-                } else {
-                    mat = mat.texture(tex_id + base_tex_id);
-                }
-
-                // Normal
-                let normal_tex_id = mat.normal_tex_id();
-                if normal_tex_id == 0xFFFF {
-                    mat = mat.normal_texture(2); // Default Flat Normal
-                    println!("Normal texture not found for material");
-                } else {
-                    mat = mat.normal_texture(normal_tex_id + base_tex_id);
-                }
-
-                // Occlusion
-                let occlusion_tex_id = mat.occlusion_tex_id();
-                if occlusion_tex_id == 0xFFFF {
-                    mat = mat.occlusion_texture(0); // Default White (No occlusion)
-                    println!("Occlusion texture not found for material");
-                } else {
-                    mat = mat.occlusion_texture(occlusion_tex_id + base_tex_id);
-                }
-
-                // Emissive
-                let emissive_tex_id = mat.emissive_tex_id();
-                if emissive_tex_id == 0xFFFF {
-                    mat = mat.emissive_texture(3); // Default Black (No emission)
-                    println!("Emissive texture not found for material");
-                } else {
-                    mat = mat.emissive_texture(emissive_tex_id + base_tex_id);
-                }
-
-                // Metallic Roughness
-                let mr_tex_id = mat.metallic_roughness_tex_id();
-                if mr_tex_id != 0xFFFF {
-                    mat = mat.metallic_roughness_texture(mr_tex_id + base_tex_id);
-                }
-
-                gltf_mats.push(mat);
-            }
-        }
-        Err(e) => {
-            eprintln!("Failed to load Avocado.glb: {:?}", e);
-        }
-    }
-
-    // 2. BLAS Build (まとめて実行)
-    // Plane + Light Geometry + GLTF Geometries
-    let mut all_geos = vec![&plane_geo, &light_geo];
-    for geo in &gltf_geos {
-        all_geos.push(geo);
-    }
-    SceneBuilder::build_blases(device, queue, &all_geos);
-
-    // 3. メッシュとマテリアルの登録
-
-    // Plane
-    let plane_id = builder.add_mesh(plane_geo);
-    // Light
-    let light_mesh_id = builder.add_mesh(light_geo);
-
-    // GLTF Meshes
-    let mut gltf_mesh_ids = Vec::new();
-    for geo in gltf_geos {
-        gltf_mesh_ids.push(builder.add_mesh(geo));
-    }
-
-    // Materials
-    let mat_floor = builder.add_material(
-        Material::new([0.73, 0.73, 0.73, 1.0])
-            .roughness(0.99)
-            .texture(0)
-            .normal_texture(2) // Flat
-            .occlusion_texture(0) // White
-            .emissive_texture(3), // Black
-    );
-    // Light Material (Emissive)
-    let mat_light = builder.add_material(
-        Material::new([1.0, 1.0, 1.0, 1.0]) // High intensity color
-            .emissive_factor([10.0, 10.0, 10.0])
-            .light_index(0) // Map to first light
-            .texture(0)
-            .occlusion_texture(0),
-    );
-
-    let mut gltf_mat_ids = Vec::new();
-    for mat in gltf_mats {
-        gltf_mat_ids.push(builder.add_material(mat));
-    }
-
-    // 4. インスタンスの配置
-    // Floor
-    builder.add_instance(
-        plane_id,
-        mat_floor,
-        Mat4::from_translation(Vec3::new(0.0, -1.0, 0.0)) * Mat4::from_scale(Vec3::splat(10.0)),
-        0x1,
-    );
-
-    // Avocado
-    for (i, &mesh_id) in gltf_mesh_ids.iter().enumerate() {
-        // マテリアルIDの対応 (単純に順序通りと仮定)
-        let mat_id = if i < gltf_mat_ids.len() {
-            gltf_mat_ids[i]
-        } else {
-            // マテリアルが不足している場合
-            println!("Material not found for mesh {}", i);
-            0
-        };
-
-        builder.add_instance(
-            mesh_id,
-            mat_id,
-            Mat4::from_translation(Vec3::new(0.0, 0.0, 0.0))
-                * Mat4::from_scale(Vec3::splat(0.5))
-                * Mat4::from_rotation_x(std::f32::consts::PI / 2.0),
-            0x1,
-        );
-    }
-
-    // Light Instance
-    builder.add_instance(
-        light_mesh_id,
-        mat_light,
+pub fn create_avocado_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneResources {
+    create_gltf_scene(
+        device,
+        queue,
+        "assets/models/Avocado.glb",
+        Mat4::from_translation(Vec3::new(0.0, 0.0, 0.0)) * Mat4::from_scale(Vec3::splat(20.0)),
         Mat4::from_translation(Vec3::new(0.0, 5.0, 0.0))
-            * Mat4::from_rotation_x(std::f32::consts::PI) // 下向き
+            * Mat4::from_rotation_x(std::f32::consts::PI)
             * Mat4::from_scale(Vec3::splat(1.0)),
-        0x1,
-    );
+    )
+}
 
-    // 5. 光源データ
-    builder.add_quad_light(
-        Vec3::new(0.0, 5.0, 0.0).into(),
-        [0.5, 0.0, 0.0], // 少し大きめに
-        [0.0, 0.0, 0.5],
-        [1.0, 1.0, 1.0, 15.0],
-    );
+#[allow(dead_code)]
+pub fn create_damaged_helmet_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneResources {
+    create_gltf_scene(
+        device,
+        queue,
+        "assets/models/DamagedHelmet.glb",
+        Mat4::from_translation(Vec3::new(0.0, 0.0, 0.0))
+            * Mat4::from_rotation_x(std::f32::consts::PI / 2.0)
+            * Mat4::from_scale(Vec3::splat(1.0)),
+        Mat4::from_translation(Vec3::new(0.0, 5.0, 0.0))
+            * Mat4::from_rotation_x(std::f32::consts::PI)
+            * Mat4::from_scale(Vec3::splat(1.0)),
+    )
+}
 
-    builder.build(device, queue)
+#[allow(dead_code)]
+pub fn create_multi_material_model_scene(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> SceneResources {
+    create_gltf_scene(
+        device,
+        queue,
+        "assets/models/AliciaSolid.vrm",
+        Mat4::from_translation(Vec3::new(0.0, 0.0, 0.0))
+            * Mat4::from_scale(Vec3::splat(0.5))
+            * Mat4::from_rotation_y(std::f32::consts::PI),
+        Mat4::from_translation(Vec3::new(0.0, 5.0, 0.0))
+            * Mat4::from_rotation_x(std::f32::consts::PI)
+            * Mat4::from_scale(Vec3::splat(1.0)),
+    )
 }

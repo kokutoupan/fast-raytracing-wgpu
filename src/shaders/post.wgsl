@@ -155,7 +155,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     m2 /= 9.0;
 
     let sigma = sqrt(max(vec3f(0.0), m2 - m1 * m1));
-    let gamma = 1.25; // Slightly deeper box
+    let gamma = 1.5; // Higher Gamma for stability
     let c_min = m1 - gamma * sigma;
     let c_max = m1 + gamma * sigma;
     let c_avg = m1; 
@@ -163,7 +163,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     // 3. History Sampling & Reprojection
     var history_color = tm_filtered; // Use Tonemapped filtered as default
     var valid_history = false;
-    let blend_factor_base = 0.9;
+    let blend_factor_base = 0.90; // High history weight to kill micro-shimmer
     var blend_factor = blend_factor_base;
     var structure_motion = vec2f(0.0);
 
@@ -182,27 +182,28 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         let p3 = p0 + vec2i(1, 1);
 
         let f = fract(prev_pos);
-
+        
+        let margin = 0.0; // Strict check
         if prev_uv.x >= 0.0 && prev_uv.y >= 0.0 && prev_uv.x <= 1.0 && prev_uv.y <= 1.0 {
-             let idx0 = u32(p0.y) * params.width + u32(p0.x);
-             let idx1 = u32(p1.y) * params.width + u32(p1.x);
-             let idx2 = u32(p2.y) * params.width + u32(p2.x);
-             let idx3 = u32(p3.y) * params.width + u32(p3.x);
-
-             var c0 = vec3f(0.0);
-             var c1 = vec3f(0.0);
-             var c2 = vec3f(0.0);
-             var c3 = vec3f(0.0);
-
-             // History is already Tonemapped?
-             // NO! The accumulation buffer stores the RESULT of the previous frame.
-             // If we Inverse Tonemap at the end of this shader, the history (read from accumulation) is linear HDR.
-             // So we must Tonemap the history sample too.
+             let w_i = i32(params.width);
+             let h_i = i32(params.height);
              
-             if p0.x >= 0 && p0.y >= 0 && p0.x < i32(params.width) && p0.y < i32(params.height) { c0 = resolve_tonemap(history[idx0].rgb); }
-             if p1.x >= 0 && p1.y >= 0 && p1.x < i32(params.width) && p1.y < i32(params.height) { c1 = resolve_tonemap(history[idx1].rgb); }
-             if p2.x >= 0 && p2.y >= 0 && p2.x < i32(params.width) && p2.y < i32(params.height) { c2 = resolve_tonemap(history[idx2].rgb); }
-             if p3.x >= 0 && p3.y >= 0 && p3.x < i32(params.width) && p3.y < i32(params.height) { c3 = resolve_tonemap(history[idx3].rgb); }
+             let p0_c = clamp(p0, vec2i(0), vec2i(w_i - 1, h_i - 1));
+             let p1_c = clamp(p1, vec2i(0), vec2i(w_i - 1, h_i - 1));
+             let p2_c = clamp(p2, vec2i(0), vec2i(w_i - 1, h_i - 1));
+             let p3_c = clamp(p3, vec2i(0), vec2i(w_i - 1, h_i - 1));
+
+             let idx0 = u32(p0_c.y) * params.width + u32(p0_c.x);
+             let idx1 = u32(p1_c.y) * params.width + u32(p1_c.x);
+             let idx2 = u32(p2_c.y) * params.width + u32(p2_c.x);
+             let idx3 = u32(p3_c.y) * params.width + u32(p3_c.x);
+
+             // Store directly to temp variables to avoid mutability confusion, or just use c0, c1...
+             // Since history is linear/HDR, we need to tonemap it before mixing.
+             let c0 = resolve_tonemap(history[idx0].rgb);
+             let c1 = resolve_tonemap(history[idx1].rgb);
+             let c2 = resolve_tonemap(history[idx2].rgb);
+             let c3 = resolve_tonemap(history[idx3].rgb);
 
               let c01 = mix(c0, c1, f.x);
               let c23 = mix(c2, c3, f.x);
@@ -221,6 +222,11 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         let clipped_ycocg = clamp(hist_ycocg, c_min, c_max);
         
         let clamped_history = ycocg_to_rgb(clipped_ycocg);
+
+        let motion_px = structure_motion * vec2f(f32(params.width), f32(params.height));
+        let speed = length(motion_px);
+
+        let blend_factor = mix(0.97, 0.85, clamp(speed, 0.0, 1.0));
         
         // Feedback
         final_tm = mix(tm_filtered, clamped_history, blend_factor);

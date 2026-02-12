@@ -250,5 +250,5 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
     textureStore(out_albedo, coord, vec4f(base_color, 1.0)); // Occlusion is burned in
     // Motion
-    textureStore(out_motion, coord, vec4f(motion, 0.0, 0.0));
+    textureStore(out_motion, coord, vec4f(motion,  0.0, 0.0));
 }

@@ -198,10 +198,9 @@ impl CameraController {
 
         // Scale by pixel size to get NDC offset
         // NDC is [-1, 1], so pixel size is 2.0 / size
-        // Reducing jitter scale to 0.5 pixels (Factor 1.0 instead of 2.0)
         (
-            (halton_x * 1.0) / width as f32,
-            (halton_y * 1.0) / height as f32,
+            (halton_x * 0.5) / width as f32,
+            (halton_y * 0.5) / height as f32,
         )
     }
 

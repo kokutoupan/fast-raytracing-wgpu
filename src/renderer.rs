@@ -304,6 +304,7 @@ impl Renderer {
             &post_params_buffer,
             &targets.gbuffer_normal_view,
             &targets.gbuffer_pos_view,
+            &targets.gbuffer_albedo_view, // Pass Albedo
             &targets.gbuffer_motion_view,
             &sampler, // Pass sampler
         );

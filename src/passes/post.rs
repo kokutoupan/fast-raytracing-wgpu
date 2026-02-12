@@ -14,8 +14,9 @@ impl PostPass {
         params_buffer: &wgpu::Buffer,
         gbuffer_normal_views: &[wgpu::TextureView; 2],
         gbuffer_pos_views: &[wgpu::TextureView; 2],
+        gbuffer_albedo_views: &[wgpu::TextureView; 2],
         gbuffer_motion: &wgpu::TextureView,
-        sampler: &wgpu::Sampler, // New Arg
+        sampler: &wgpu::Sampler,
     ) -> Self {
         let shader = ctx
             .device
@@ -117,6 +118,17 @@ impl PostPass {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
+                    // Binding 9: G-Buffer Albedo
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 9,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -143,6 +155,7 @@ impl PostPass {
         let create_bg = |label: &str,
                          normal: &wgpu::TextureView,
                          pos: &wgpu::TextureView,
+                         albedo: &wgpu::TextureView,
                          history_buf: &wgpu::Buffer,
                          output_buf: &wgpu::Buffer| {
             ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -185,6 +198,10 @@ impl PostPass {
                         binding: 8,
                         resource: wgpu::BindingResource::Sampler(sampler),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 9,
+                        resource: wgpu::BindingResource::TextureView(albedo),
+                    },
                 ],
             })
         };
@@ -193,6 +210,7 @@ impl PostPass {
             "Post Bind Group 0",
             &gbuffer_normal_views[0],
             &gbuffer_pos_views[0],
+            &gbuffer_albedo_views[0],
             &accumulation_buffers[1], // Read from prev
             &accumulation_buffers[0], // Write to curr
         );
@@ -200,6 +218,7 @@ impl PostPass {
             "Post Bind Group 1",
             &gbuffer_normal_views[1],
             &gbuffer_pos_views[1],
+            &gbuffer_albedo_views[1],
             &accumulation_buffers[0], // Read from prev (which was curr)
             &accumulation_buffers[1], // Write to curr
         );

@@ -6,6 +6,7 @@
 @group(0) @binding(6) var motion_tex: texture_2d<f32>;
 @group(0) @binding(7) var<storage, read_write> accumulation: array<vec4f>;
 @group(0) @binding(8) var smp: sampler; // New Binding
+@group(0) @binding(9) var albedo_tex: texture_2d<f32>; // Albedo Binding
 
 struct PostParams {
     width: u32,
@@ -74,6 +75,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
     // Use Hardware Bilinear Sampling (now supported with Rgba16Float)
     let center_color = textureSampleLevel(raw_tex, smp, sample_uv, 0.0).rgb;
+    let center_albedo = textureSampleLevel(albedo_tex, smp, sample_uv, 0.0).rgb;
     
     // For Normals/Pos, keep using Load (Unjittered sampling for G-Buffer? Maybe later, sticking to center for now)
     let center_normal_encoded = textureLoad(normal_tex, coords, 0).xy;
@@ -85,7 +87,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
     // Bilateral Filter Parameters
     let sigma_spatial = 1.5;
-    let sigma_color = 0.5;
+    let sigma_color = 0.4;
     let sigma_normal = 0.1;
     let sigma_pos = 0.1;
     let kernel_radius = 2;
@@ -104,6 +106,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
             // Unjittered Sample
             let sample_color = textureSampleLevel(raw_tex, smp, neighbor_sample_uv, 0.0).rgb;
+            let sample_albedo = textureSampleLevel(albedo_tex, smp, neighbor_sample_uv, 0.0).rgb;
             
             let sample_normal_encoded = textureLoad(normal_tex, neighbor_coords, 0).xy;
             let sample_normal = decode_octahedral_normal(sample_normal_encoded);
@@ -113,8 +116,8 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
             let dist_spatial = length(vec2f(offset));
             let w_spatial = gauss(dist_spatial, sigma_spatial);
 
-            // Color weight (similarity)
-            let dist_color = length(sample_color - center_color);
+            // Color weight (similarity) using Albedo
+            let dist_color = length(sample_albedo - center_albedo); 
             let w_color = gauss(dist_color, sigma_color);
 
             // Normal weight

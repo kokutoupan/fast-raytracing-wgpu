@@ -233,16 +233,28 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         let hist_ycocg = rgb_to_ycocg(history_color);
         
         let clipped_ycocg = clamp(hist_ycocg, c_min, c_max);
-        
         let clamped_history = ycocg_to_rgb(clipped_ycocg);
 
-        // let motion_px = structure_motion * vec2f(f32(params.width), f32(params.height));
-        // let speed = length(motion_px);
+        // --- Dynamic Blend Factor based on Motion ---
+        // Calculate velocity in pixels
+        let motion_px = structure_motion * vec2f(f32(params.width), f32(params.height));
+        let speed = length(motion_px);
 
-        // let blend_factor = mix(0.97, 0.85, clamp(speed, 0.0, 1.0));
+        // If speed is low, we trust history more (High feedback).
+        // If speed is high, we trust current frame more (Low feedback).
+        // Base feedback: 0.90. Max feedback: 0.97 (or even 0.98 for very static).
+        var dynamic_feedback = mix(0.98, 0.85, smoothstep(0.0, 2.0, speed));
         
-        // Feedback
-        final_tm = mix(tm_filtered, clamped_history, blend_factor);
+        // --- Relaxed Clipping for Static Scenes ---
+        // If motion is very low, the "Current Neighborhood" might be dominated by noise.
+        // The "Clamped History" will thus jitter.
+        // To stabilize, we allow some "Unclipped History" to bleed through if we are confident the pixel hasn't moved.
+        // Be careful: This causes ghosting if lighting changes rapidly on static objects.
+        // But for "Static Image Quality", it's a good tradeoff.
+        let static_factor = 1.0 - smoothstep(0.0, 0.5, speed);
+        let final_history_color = mix(clamped_history, history_color, static_factor * 0.2); // 20% relax max
+
+        final_tm = mix(tm_filtered, final_history_color, dynamic_feedback);
     }
     
     // Inverse Tonemap to get back to Linear HDR

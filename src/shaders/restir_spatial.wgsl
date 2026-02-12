@@ -116,7 +116,7 @@ struct PathResult {
 
 @group(0) @binding(12) var prev_gbuffer_pos: texture_2d<f32>;
 @group(0) @binding(13) var prev_gbuffer_normal: texture_2d<f32>;
-@group(0) @binding(14) var out_tex: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(14) var out_tex: texture_storage_2d<rgba16float, write>;
 
 // Group 1: Textures
 @group(1) @binding(0) var tex_sampler: sampler;

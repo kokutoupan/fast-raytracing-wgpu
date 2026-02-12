@@ -14,7 +14,8 @@ impl PostPass {
         params_buffer: &wgpu::Buffer,
         gbuffer_normal_views: &[wgpu::TextureView; 2],
         gbuffer_pos_views: &[wgpu::TextureView; 2],
-        gbuffer_motion: &wgpu::TextureView, // New
+        gbuffer_motion: &wgpu::TextureView,
+        sampler: &wgpu::Sampler, // New Arg
     ) -> Self {
         let shader = ctx
             .device
@@ -29,7 +30,7 @@ impl PostPass {
                         binding: 0,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
                             view_dimension: wgpu::TextureViewDimension::D2,
                             multisampled: false,
                         },
@@ -87,7 +88,7 @@ impl PostPass {
                         },
                         count: None,
                     },
-                    // Binding 6: Motion (New)
+                    // Binding 6: Motion
                     wgpu::BindGroupLayoutEntry {
                         binding: 6,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -98,7 +99,7 @@ impl PostPass {
                         },
                         count: None,
                     },
-                    // Binding 7: Accumulation Output (New, WriteOnly)
+                    // Binding 7: Accumulation
                     wgpu::BindGroupLayoutEntry {
                         binding: 7,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -109,25 +110,35 @@ impl PostPass {
                         },
                         count: None,
                     },
+                    // Binding 8: Sampler
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 8,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
                 ],
             });
 
-        let pipeline =
-            ctx.device
-                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some("Post Pipeline"),
-                    layout: Some(&ctx.device.create_pipeline_layout(
-                        &wgpu::PipelineLayoutDescriptor {
-                            label: None,
-                            bind_group_layouts: &[&bgl],
-                            immediate_size: 0,
-                        },
-                    )),
-                    module: &shader,
-                    entry_point: Some("main"),
-                    compilation_options: Default::default(),
-                    cache: None,
-                });
+        let pipeline_layout = ctx
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Post Pipeline Layout"),
+                bind_group_layouts: &[&bgl],
+                // push_constant_ranges: &[],
+                immediate_size: 0,
+            });
+
+        let pipeline = ctx
+            .device
+            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Post Pipeline"),
+                layout: Some(&pipeline_layout),
+                module: &shader,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
 
         let create_bg = |label: &str,
                          normal: &wgpu::TextureView,
@@ -170,30 +181,32 @@ impl PostPass {
                         binding: 7,
                         resource: output_buf.as_entire_binding(),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
                 ],
             })
         };
 
-        // Frame 0: Read from Buf[1], Write to Buf[0]
-        let bg0 = create_bg(
+        let bind_group0 = create_bg(
             "Post Bind Group 0",
             &gbuffer_normal_views[0],
             &gbuffer_pos_views[0],
-            &accumulation_buffers[1], // History
-            &accumulation_buffers[0], // Output
+            &accumulation_buffers[1], // Read from prev
+            &accumulation_buffers[0], // Write to curr
         );
-        // Frame 1: Read from Buf[0], Write to Buf[1]
-        let bg1 = create_bg(
+        let bind_group1 = create_bg(
             "Post Bind Group 1",
             &gbuffer_normal_views[1],
             &gbuffer_pos_views[1],
-            &accumulation_buffers[0], // History
-            &accumulation_buffers[1], // Output
+            &accumulation_buffers[0], // Read from prev (which was curr)
+            &accumulation_buffers[1], // Write to curr
         );
 
         Self {
             pipeline,
-            bind_groups: [bg0, bg1],
+            bind_groups: [bind_group0, bind_group1],
         }
     }
 

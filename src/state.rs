@@ -11,6 +11,7 @@ pub struct State {
     pub renderer: Renderer,
 
     pub window: Arc<winit::window::Window>,
+    pub current_jitter: (f32, f32),
 
     // シーン資源
     pub scene_resources: scene::SceneResources,
@@ -48,9 +49,9 @@ impl State {
 
         // 2. シーン構築
         // let scene_resources = scene::scenes::create_restir_scene(&ctx.device, &ctx.queue);
-        // let scene_resources = scene::scenes::create_cornell_box(&ctx.device, &ctx.queue);
+        let scene_resources = scene::scenes::create_cornell_box(&ctx.device, &ctx.queue);
         // let scene_resources = scene::scenes::create_avocado_scene(&ctx.device, &ctx.queue);
-        let scene_resources = scene::scenes::create_damaged_helmet_scene(&ctx.device, &ctx.queue);
+        // let scene_resources = scene::scenes::create_damaged_helmet_scene(&ctx.device, &ctx.queue);
         // let scene_resources =
         //     scene::scenes::create_multi_material_model_scene(&ctx.device, &ctx.queue);
 
@@ -99,6 +100,7 @@ impl State {
             ctx,
             renderer,
             window,
+            current_jitter: (0.0, 0.0),
             scene_resources,
             camera_buffer,
             camera_controller,
@@ -154,6 +156,7 @@ impl State {
             self.renderer.render_width,
             self.renderer.render_height,
         );
+        self.current_jitter = jitter;
 
         let (camera_uniform, unjittered_view_proj) = self.camera_controller.build_uniform(
             self.renderer.aspect_ratio(),
@@ -195,6 +198,7 @@ impl State {
             &self.scene_resources.mesh_info_buffer,
             &self.scene_resources.tlas,
             self.scene_resources.num_lights,
+            self.current_jitter,
         )?;
 
         // 自動スクリーンショット (検証用: 最初の1回だけ,オフ)

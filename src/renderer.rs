@@ -5,12 +5,14 @@ use crate::wgpu_utils::*;
 use bytemuck::{Pod, Zeroable};
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PostParams {
     pub width: u32,
     pub height: u32,
     pub frame_count: u32,
     pub spp: u32,
+    pub jitter: [f32; 2],
+    pub _padding: [f32; 2],
 }
 
 #[repr(C)]
@@ -68,7 +70,7 @@ impl RenderTargets {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba32Float,
+            format: wgpu::TextureFormat::Rgba16Float, // Changed to 16Float for filtering
             usage: wgpu::TextureUsages::STORAGE_BINDING
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_DST,
@@ -218,6 +220,8 @@ impl Renderer {
                 height: render_height,
                 frame_count: 0,
                 spp: 2,
+                jitter: [0.0, 0.0],
+                _padding: [0.0, 0.0],
             }],
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
@@ -300,7 +304,8 @@ impl Renderer {
             &post_params_buffer,
             &targets.gbuffer_normal_view,
             &targets.gbuffer_pos_view,
-            &targets.gbuffer_motion_view, // New
+            &targets.gbuffer_motion_view,
+            &sampler, // Pass sampler
         );
 
         let blit_pass = BlitPass::new(ctx, &targets.pp_view, &sampler, &blit_params_buffer);
@@ -349,6 +354,7 @@ impl Renderer {
         _mesh_info_buffer: &wgpu::Buffer,
         _tlas: &wgpu::Tlas,
         light_count: u32,
+        jitter: (f32, f32),
     ) -> Result<(), wgpu::SurfaceError> {
         let mut encoder = ctx
             .device
@@ -363,6 +369,8 @@ impl Renderer {
                 height: self.render_height,
                 frame_count: self.frame_count,
                 spp: 2,
+                jitter: [jitter.0, jitter.1],
+                _padding: [0.0, 0.0],
             }]),
         );
 

@@ -3,15 +3,17 @@
 @group(0) @binding(2) var out_tex: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(3) var normal_tex: texture_2d<f32>;
 @group(0) @binding(4) var pos_tex: texture_2d<f32>;
-@group(0) @binding(6) var motion_tex: texture_2d<f32>; // New Binding
-@group(0) @binding(7) var<storage, read_write> accumulation: array<vec4f>; // New Binding
-
+@group(0) @binding(6) var motion_tex: texture_2d<f32>;
+@group(0) @binding(7) var<storage, read_write> accumulation: array<vec4f>;
+@group(0) @binding(8) var smp: sampler; // New Binding
 
 struct PostParams {
     width: u32,
     height: u32,
     frame_count: u32,
     spp: u32,
+    jitter: vec2f,
+    padding: vec2f,
 };
 @group(0) @binding(5) var<uniform> params: PostParams;
 
@@ -53,6 +55,8 @@ fn resolve_inverse_tonemap(c: vec3f) -> vec3f {
     return c / (1.0 - max(c.r, max(c.g, c.b)));
 }
 
+// Manual Bilinear Sampling helper removed (using Rgba16Float and hardware filtering)
+
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) id: vec3u) {
     if id.x >= params.width || id.y >= params.height {
@@ -61,8 +65,17 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
     let coords = id.xy;
     let idx = coords.y * params.width + coords.x;
+    let size = vec2f(f32(params.width), f32(params.height));
+    let uv = (vec2f(coords) + 0.5) / size;
 
-    let center_color = textureLoad(raw_tex, coords, 0).rgb;
+    // Unjitter Offset (matches User's logic: X inverted, Y kept, Scale 0.5)
+    let unjitter_offset = vec2f(-params.jitter.x, params.jitter.y) * 0.5;
+    let sample_uv = uv + unjitter_offset;
+
+    // Use Hardware Bilinear Sampling (now supported with Rgba16Float)
+    let center_color = textureSampleLevel(raw_tex, smp, sample_uv, 0.0).rgb;
+    
+    // For Normals/Pos, keep using Load (Unjittered sampling for G-Buffer? Maybe later, sticking to center for now)
     let center_normal_encoded = textureLoad(normal_tex, coords, 0).xy;
     let center_normal = decode_octahedral_normal(center_normal_encoded);
     let center_pos = textureLoad(pos_tex, coords, 0).xyz;
@@ -80,17 +93,21 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     for (var dy = -kernel_radius; dy <= kernel_radius; dy++) {
         for (var dx = -kernel_radius; dx <= kernel_radius; dx++) {
             let offset = vec2i(dx, dy);
-            let sample_coords = vec2i(coords) + offset;
+            let neighbor_coords = vec2i(coords) + offset;
+            let neighbor_uv = (vec2f(neighbor_coords) + 0.5) / size;
+            let neighbor_sample_uv = neighbor_uv + unjitter_offset;
 
-            // Bounds check
-            if sample_coords.x < 0 || sample_coords.y < 0 || sample_coords.x >= i32(params.width) || sample_coords.y >= i32(params.height) {
+            // Bounds check (pixel coords)
+            if neighbor_coords.x < 0 || neighbor_coords.y < 0 || neighbor_coords.x >= i32(params.width) || neighbor_coords.y >= i32(params.height) {
                 continue;
             }
 
-            let sample_color = textureLoad(raw_tex, sample_coords, 0).rgb;
-            let sample_normal_encoded = textureLoad(normal_tex, sample_coords, 0).xy;
+            // Unjittered Sample
+            let sample_color = textureSampleLevel(raw_tex, smp, neighbor_sample_uv, 0.0).rgb;
+            
+            let sample_normal_encoded = textureLoad(normal_tex, neighbor_coords, 0).xy;
             let sample_normal = decode_octahedral_normal(sample_normal_encoded);
-            let sample_pos = textureLoad(pos_tex, sample_coords, 0).xyz;
+            let sample_pos = textureLoad(pos_tex, neighbor_coords, 0).xyz;
 
             // Spatial weight
             let dist_spatial = length(vec2f(offset));
@@ -120,13 +137,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         filtered_color = sum_color / sum_weight;
     }
 
-    // --- TAA (Reprojection) ---
-
-    // 2. Neighborhood Sampling (3x3) & AABB Calculation in YCoCg
-    
-    // Sample accumulated color? No, we filter the raw frame first (filtered_color).
-    // We want to constrain history to the CURRENT frame's neighborhood.
-    // 3. Neighborhood Sampling (Variance Clipping)
+    // --- Variance Clipping ---
     var m1 = vec3f(0.0);
     var m2 = vec3f(0.0);
     
@@ -136,9 +147,12 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     for (var dy = -1; dy <= 1; dy++) {
         for (var dx = -1; dx <= 1; dx++) {
              let neighbor_coords = vec2i(coords) + vec2i(dx, dy);
+             let neighbor_uv = (vec2f(neighbor_coords) + 0.5) / size;
+             let neighbor_sample_uv = neighbor_uv + unjitter_offset;
+
              var s_col = vec3f(0.0);
              if neighbor_coords.x >= 0 && neighbor_coords.y >= 0 && neighbor_coords.x < i32(params.width) && neighbor_coords.y < i32(params.height) {
-                 s_col = textureLoad(raw_tex, neighbor_coords, 0).rgb;
+                 s_col = textureSampleLevel(raw_tex, smp, neighbor_sample_uv, 0.0).rgb;
              } else {
                  s_col = filtered_color;
              }
@@ -155,7 +169,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     m2 /= 9.0;
 
     let sigma = sqrt(max(vec3f(0.0), m2 - m1 * m1));
-    let gamma = 1.5; // Higher Gamma for stability
+    let gamma = 1.25; // Slightly deeper box
     let c_min = m1 - gamma * sigma;
     let c_max = m1 + gamma * sigma;
     let c_avg = m1; 
@@ -163,7 +177,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     // 3. History Sampling & Reprojection
     var history_color = tm_filtered; // Use Tonemapped filtered as default
     var valid_history = false;
-    let blend_factor_base = 0.90; // High history weight to kill micro-shimmer
+    let blend_factor_base = 0.9;
     var blend_factor = blend_factor_base;
     var structure_motion = vec2f(0.0);
 
@@ -182,28 +196,27 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         let p3 = p0 + vec2i(1, 1);
 
         let f = fract(prev_pos);
-        
-        let margin = 0.0; // Strict check
+
         if prev_uv.x >= 0.0 && prev_uv.y >= 0.0 && prev_uv.x <= 1.0 && prev_uv.y <= 1.0 {
-             let w_i = i32(params.width);
-             let h_i = i32(params.height);
+             let idx0 = u32(p0.y) * params.width + u32(p0.x);
+             let idx1 = u32(p1.y) * params.width + u32(p1.x);
+             let idx2 = u32(p2.y) * params.width + u32(p2.x);
+             let idx3 = u32(p3.y) * params.width + u32(p3.x);
+
+             var c0 = vec3f(0.0);
+             var c1 = vec3f(0.0);
+             var c2 = vec3f(0.0);
+             var c3 = vec3f(0.0);
+
+             // History is already Tonemapped?
+             // NO! The accumulation buffer stores the RESULT of the previous frame.
+             // If we Inverse Tonemap at the end of this shader, the history (read from accumulation) is linear HDR.
+             // So we must Tonemap the history sample too.
              
-             let p0_c = clamp(p0, vec2i(0), vec2i(w_i - 1, h_i - 1));
-             let p1_c = clamp(p1, vec2i(0), vec2i(w_i - 1, h_i - 1));
-             let p2_c = clamp(p2, vec2i(0), vec2i(w_i - 1, h_i - 1));
-             let p3_c = clamp(p3, vec2i(0), vec2i(w_i - 1, h_i - 1));
-
-             let idx0 = u32(p0_c.y) * params.width + u32(p0_c.x);
-             let idx1 = u32(p1_c.y) * params.width + u32(p1_c.x);
-             let idx2 = u32(p2_c.y) * params.width + u32(p2_c.x);
-             let idx3 = u32(p3_c.y) * params.width + u32(p3_c.x);
-
-             // Store directly to temp variables to avoid mutability confusion, or just use c0, c1...
-             // Since history is linear/HDR, we need to tonemap it before mixing.
-             let c0 = resolve_tonemap(history[idx0].rgb);
-             let c1 = resolve_tonemap(history[idx1].rgb);
-             let c2 = resolve_tonemap(history[idx2].rgb);
-             let c3 = resolve_tonemap(history[idx3].rgb);
+             if p0.x >= 0 && p0.y >= 0 && p0.x < i32(params.width) && p0.y < i32(params.height) { c0 = resolve_tonemap(history[idx0].rgb); }
+             if p1.x >= 0 && p1.y >= 0 && p1.x < i32(params.width) && p1.y < i32(params.height) { c1 = resolve_tonemap(history[idx1].rgb); }
+             if p2.x >= 0 && p2.y >= 0 && p2.x < i32(params.width) && p2.y < i32(params.height) { c2 = resolve_tonemap(history[idx2].rgb); }
+             if p3.x >= 0 && p3.y >= 0 && p3.x < i32(params.width) && p3.y < i32(params.height) { c3 = resolve_tonemap(history[idx3].rgb); }
 
               let c01 = mix(c0, c1, f.x);
               let c23 = mix(c2, c3, f.x);
@@ -223,10 +236,10 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         
         let clamped_history = ycocg_to_rgb(clipped_ycocg);
 
-        let motion_px = structure_motion * vec2f(f32(params.width), f32(params.height));
-        let speed = length(motion_px);
+        // let motion_px = structure_motion * vec2f(f32(params.width), f32(params.height));
+        // let speed = length(motion_px);
 
-        let blend_factor = mix(0.97, 0.85, clamp(speed, 0.0, 1.0));
+        // let blend_factor = mix(0.97, 0.85, clamp(speed, 0.0, 1.0));
         
         // Feedback
         final_tm = mix(tm_filtered, clamped_history, blend_factor);

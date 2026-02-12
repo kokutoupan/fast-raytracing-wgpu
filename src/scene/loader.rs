@@ -8,12 +8,13 @@ use image::{DynamicImage, ImageBuffer, Rgba};
 pub fn load_gltf(
     path: &str,
     device: &wgpu::Device,
-) -> Result<(Vec<Geometry>, Vec<Material>, Vec<DynamicImage>)> {
+) -> Result<(Vec<Geometry>, Vec<Material>, Vec<DynamicImage>, Vec<usize>)> {
     let (document, buffers, images) = gltf::import(path)?;
 
     let mut geometries = Vec::new();
     let mut materials = Vec::new();
     let mut loaded_images = Vec::new();
+    let mut material_indices = Vec::new();
 
     // 0. Load Images
     for image in images {
@@ -162,8 +163,9 @@ pub fn load_gltf(
             );
 
             geometries.push(geo);
+            material_indices.push(primitive.material().index().unwrap_or(0));
         }
     }
 
-    Ok((geometries, materials, loaded_images))
+    Ok((geometries, materials, loaded_images, material_indices))
 }

@@ -304,10 +304,11 @@ pub fn create_gltf_scene(
 
     let mut gltf_geos = Vec::new();
     let mut gltf_mats = Vec::new();
+    let mut gltf_material_indices = Vec::new();
 
     // GLTF読み込み
     match loader::load_gltf(file_path, device) {
-        Ok((geos, mats, images)) => {
+        Ok((geos, mats, images, gltf_mat_indices)) => {
             println!(
                 "Loaded {}: {} geometries, {} materials, {} images",
                 file_path,
@@ -316,6 +317,7 @@ pub fn create_gltf_scene(
                 images.len()
             );
             gltf_geos = geos;
+            gltf_material_indices = gltf_mat_indices;
 
             // Load textures into builder and get the base ID offset
             let base_tex_id = builder.textures.len() as u32;
@@ -428,10 +430,17 @@ pub fn create_gltf_scene(
 
     // GLTF Instances
     for (i, &mesh_id) in gltf_mesh_ids.iter().enumerate() {
-        let mat_id = if i < gltf_mat_ids.len() {
-            gltf_mat_ids[i]
+        let mat_index = if i < gltf_material_indices.len() {
+            gltf_material_indices[i]
         } else {
-            eprintln!("Material not found for mesh {}", i);
+            eprintln!("Material index out of bounds for mesh {}", i);
+            0
+        };
+
+        let mat_id = if mat_index < gltf_mat_ids.len() {
+            gltf_mat_ids[mat_index]
+        } else {
+            eprintln!("Material index out of bounds for mesh {}", i);
             0 // Default fallback
         };
 

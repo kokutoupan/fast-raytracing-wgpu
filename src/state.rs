@@ -51,6 +51,8 @@ impl State {
         // let scene_resources = scene::scenes::create_cornell_box(&ctx.device, &ctx.queue);
         // let scene_resources = scene::scenes::create_avocado_scene(&ctx.device, &ctx.queue);
         let scene_resources = scene::scenes::create_damaged_helmet_scene(&ctx.device, &ctx.queue);
+        // let scene_resources =
+        //     scene::scenes::create_multi_material_model_scene(&ctx.device, &ctx.queue);
 
         // 3. カメラ初期化 (最初はデフォルトのアスペクト比で初期化)
         let camera_controller = CameraController::new();

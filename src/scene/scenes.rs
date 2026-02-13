@@ -29,25 +29,20 @@ pub fn create_cornell_box(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneRe
     let crystal_id = builder.add_mesh(crystal_geo);
 
     // マテリアル定義
-    let mat_red = builder.add_material(Material::new([0.65, 0.05, 0.05, 1.0]).texture(0));
-    let mat_green = builder.add_material(Material::new([0.12, 0.45, 0.15, 1.0]).texture(0));
-    let mat_white = builder.add_material(Material::new([0.73, 0.73, 0.73, 1.0]).texture(0));
+    let mat_red = builder.add_material(Material::new([0.65, 0.05, 0.05, 1.0]));
+    let mat_green = builder.add_material(Material::new([0.12, 0.45, 0.15, 1.0]));
+    let mat_white = builder.add_material(Material::new([0.73, 0.73, 0.73, 1.0]));
     let mat_checker = builder.add_material(
         Material::new([0.73, 0.73, 0.73, 1.0])
             .roughness(0.99) // Matte
             .texture(1),
     );
-    let mat_rough_metal = builder.add_material(
-        Material::new([0.8, 0.8, 0.8, 1.0])
-            .metallic(0.01)
-            .texture(0),
-    );
+    let mat_rough_metal = builder.add_material(Material::new([0.8, 0.8, 0.8, 1.0]).metallic(0.01));
 
     // 追加: クリスタル (屈折)
     let mat_crystal = builder.add_material(
         Material::new([0.5, 0.8, 1.0, 1.0]) // 薄い水色
-            .glass(1.5)
-            .texture(0),
+            .glass(1.5),
     );
 
     // 3. インスタンスの配置
@@ -152,18 +147,9 @@ pub fn create_restir_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneR
     let cube_id = builder.add_mesh(cube_geo);
 
     // 3. マテリアル
-    let mat_floor = builder.add_material(
-        Material::new([0.73, 0.73, 0.73, 1.0])
-            .roughness(0.99)
-            .texture(0),
-    );
-    let mat_wall = builder.add_material(
-        Material::new([0.73, 0.73, 0.73, 1.0])
-            .roughness(0.99)
-            .texture(0),
-    );
-    let mat_metal =
-        builder.add_material(Material::new([1.0, 1.0, 1.0, 1.0]).metallic(0.2).texture(0));
+    let mat_floor = builder.add_material(Material::new([0.73, 0.73, 0.73, 1.0]).roughness(0.99));
+    let mat_wall = builder.add_material(Material::new([0.73, 0.73, 0.73, 1.0]).roughness(0.99));
+    let mat_metal = builder.add_material(Material::new([1.0, 1.0, 1.0, 1.0]).metallic(0.2));
 
     // 4. 床と壁
     // Floor
@@ -208,8 +194,7 @@ pub fn create_restir_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneR
                         color[0] * emission_strength,
                         color[1] * emission_strength,
                         color[2] * emission_strength,
-                    ])
-                    .texture(0),
+                    ]),
             );
 
             // インスタンス(可視)
@@ -299,14 +284,8 @@ pub fn create_gltf_scene(
             let light_mesh_id = builder.add_mesh(light_geo);
 
             // Materials
-            let mat_floor = builder.add_material(
-                Material::new([0.73, 0.73, 0.73, 1.0])
-                    .roughness(0.99)
-                    .texture(0)
-                    .normal_texture(2) // Flat
-                    .occlusion_texture(0) // White
-                    .emissive_texture(3), // Black
-            );
+            let mat_floor =
+                builder.add_material(Material::new([0.73, 0.73, 0.73, 1.0]).roughness(0.99));
             // Floor Instance
             builder.add_instance(
                 plane_id,

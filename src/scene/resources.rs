@@ -17,5 +17,6 @@ pub struct SceneResources {
     pub material_buffer: wgpu::Buffer,
     pub light_buffer: wgpu::Buffer,
     pub num_lights: u32,
-    pub texture_view: wgpu::TextureView,
+    pub color_texture_view: wgpu::TextureView,
+    pub data_texture_view: wgpu::TextureView,
 }

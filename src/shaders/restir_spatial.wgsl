@@ -120,7 +120,8 @@ struct PathResult {
 
 // Group 1: Textures
 @group(1) @binding(0) var tex_sampler: sampler;
-@group(1) @binding(1) var textures: texture_2d_array<f32>;
+@group(1) @binding(1) var color_textures: texture_2d_array<f32>;
+@group(1) @binding(2) var data_textures: texture_2d_array<f32>;
 
 // Group 2: Reservoirs
 @group(2) @binding(0) var<storage, read> in_reservoirs: array<Reservoir>;
@@ -535,7 +536,7 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
 
     // --- Metallic Roughness Map Sampling ---
     if metallic_roughness_tex_id != 65535u {
-        let mr = textureSampleLevel(textures, tex_sampler, hit.uv, i32(metallic_roughness_tex_id), 0.0);
+        let mr = textureSampleLevel(data_textures, tex_sampler, hit.uv, i32(metallic_roughness_tex_id), 0.0);
         mat.metallic = mr.b * mat.metallic;
         mat.roughness = mr.g * mat.roughness;
     }
@@ -550,7 +551,7 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
          if mat.light_index == -1 {
             var emission = mat.emissive_factor;
             if emissive_tex_id != 65535u {
-                let tex_emission = textureSampleLevel(textures, tex_sampler, hit.uv, i32(emissive_tex_id), 0.0).rgb;
+                let tex_emission = textureSampleLevel(color_textures, tex_sampler, hit.uv, i32(emissive_tex_id), 0.0).rgb;
                 emission = emission * tex_emission;
             }
             accumulated_color += emission;
@@ -568,7 +569,7 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
     if mat.light_index >= 0 {
         var emission = mat.emissive_factor;
         if emissive_tex_id != 65535u {
-             let tex_emission = textureSampleLevel(textures, tex_sampler, hit.uv, i32(emissive_tex_id), 0.0).rgb;
+             let tex_emission = textureSampleLevel(color_textures, tex_sampler, hit.uv, i32(emissive_tex_id), 0.0).rgb;
              emission = emission * tex_emission;
         }
         accumulated_color += emission;
@@ -664,7 +665,7 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
         let tex_id = tex_0.x;
         
         if tex_id != 65535u {
-            tex_color = textureSampleLevel(textures, tex_sampler, hit.uv, i32(tex_id), 0.0);
+            tex_color = textureSampleLevel(color_textures, tex_sampler, hit.uv, i32(tex_id), 0.0);
         }
 
         var occlusion = 1.0;
@@ -673,14 +674,14 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
         let emissive_tex_id = tex_1.y;
         
         if occlusion_tex_id != 65535u {
-            occlusion = textureSampleLevel(textures, tex_sampler, hit.uv, i32(occlusion_tex_id), 0.0).r;
+            occlusion = textureSampleLevel(data_textures, tex_sampler, hit.uv, i32(occlusion_tex_id), 0.0).r;
         }
         base_color = mat.base_color.rgb * tex_color.rgb * occlusion;
 
         // --- Normal Mapping (Perturb hit.ffnormal) ---
         let normal_tex_id = tex_0.y;
         if normal_tex_id != 65535u {
-            let normal_map = textureSampleLevel(textures, tex_sampler, hit.uv, i32(normal_tex_id), 0.0).rgb;
+            let normal_map = textureSampleLevel(data_textures, tex_sampler, hit.uv, i32(normal_tex_id), 0.0).rgb;
             let normal_local = normalize(normal_map * 2.0 - 1.0);
             
             let tangent_sign = hit.tangent.w;
@@ -697,7 +698,7 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
 
         // --- Emission (via Texture) ---
         if mat.light_index == -1 && emissive_tex_id != 65535u {
-            let emissive_col = textureSampleLevel(textures, tex_sampler, hit.uv, i32(emissive_tex_id), 0.0).rgb;
+            let emissive_col = textureSampleLevel(color_textures, tex_sampler, hit.uv, i32(emissive_tex_id), 0.0).rgb;
             accumulated_color += emissive_col * throughput;
         }
 

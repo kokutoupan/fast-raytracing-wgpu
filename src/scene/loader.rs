@@ -3,7 +3,6 @@ use crate::scene::Material;
 use crate::scene::{TEXTURE_HEIGHT, TEXTURE_WIDTH};
 use anyhow::Result;
 use gltf::mesh::util::ReadIndices;
-use std::collections::HashSet;
 
 use image::{DynamicImage, ImageBuffer, Rgba};
 
@@ -18,23 +17,9 @@ pub fn load_gltf(
     let mut loaded_images = Vec::new();
     let mut material_indices = Vec::new();
 
-    // 0. Pre-scan Materials to identify sRGB textures
-    // BaseColor and Emissive textures should be treated as sRGB and linearized.
-    // Normal, Occlusion, and MetallicRoughness are Linear.
-    let mut srgb_texture_indices = HashSet::new();
-    for material in document.materials() {
-        let pbr = material.pbr_metallic_roughness();
-        if let Some(info) = pbr.base_color_texture() {
-            srgb_texture_indices.insert(info.texture().source().index());
-        }
-        if let Some(info) = material.emissive_texture() {
-            srgb_texture_indices.insert(info.texture().source().index());
-        }
-    }
-
-    // 1. Load Images
-    for (i, image) in images.into_iter().enumerate() {
-        // Convert to DynamicImage (Rgba8 first, then Float)
+    // 0. Load Images
+    for image in images {
+        // Convert to DynamicImage (Rgba8)
         let img = match image.format {
             gltf::image::Format::R8G8B8 => {
                 let buffer = image.pixels;
@@ -59,21 +44,11 @@ pub fn load_gltf(
             }
         };
 
-        // Convert to Rgba32F
-        let mut img_f32 = img.to_rgba32f();
-
-        // Apply sRGB linearization if needed
-        if srgb_texture_indices.contains(&i) {
-            for pixel in img_f32.pixels_mut() {
-                // Apply pow(2.2) to RGB channels. Alpha is linear.
-                pixel[0] = pixel[0].powf(2.2);
-                pixel[1] = pixel[1].powf(2.2);
-                pixel[2] = pixel[2].powf(2.2);
-            }
-        }
-
-        // Resize to TEXTURE_WIDTH x TEXTURE_HEIGHT using Lanczos3 for quality
-        let resized = DynamicImage::ImageRgba32F(img_f32).resize_exact(
+        // Resize to TEXTURE_WIDTH x TEXTURE_HEIGHT using Lanczos3
+        // Note: Resizing in sRGB space is technically incorrect (gamma error),
+        // but convenient for maintaining Rgba8 storage.
+        // For "memory saving" requested by user, this is appropriate.
+        let resized = img.resize_exact(
             TEXTURE_WIDTH,
             TEXTURE_HEIGHT,
             image::imageops::FilterType::Lanczos3,
@@ -81,7 +56,7 @@ pub fn load_gltf(
         loaded_images.push(resized);
     }
 
-    // 2. Load Materials
+    // 1. Load Materials
     for material in document.materials() {
         let pbr = material.pbr_metallic_roughness();
         let base_color = pbr.base_color_factor();
@@ -128,7 +103,7 @@ pub fn load_gltf(
         materials.push(Material::new([1.0, 1.0, 1.0, 1.0]));
     }
 
-    // 3. Load Meshes
+    // 2. Load Meshes
     for mesh in document.meshes() {
         for primitive in mesh.primitives() {
             let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));

@@ -50,8 +50,7 @@ impl WgpuContext {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
-                required_features: wgpu::Features::EXPERIMENTAL_RAY_QUERY
-                    | wgpu::Features::FLOAT32_FILTERABLE,
+                required_features: wgpu::Features::EXPERIMENTAL_RAY_QUERY,
                 required_limits: wgpu::Limits::default()
                     .using_minimum_supported_acceleration_structure_values(),
                 experimental_features: unsafe { wgpu::ExperimentalFeatures::enabled() },

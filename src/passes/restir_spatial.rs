@@ -58,6 +58,10 @@ impl RestirSpatialPass {
         output_texture_view: &wgpu::TextureView, // Write (Color Output)
         _render_width: u32,
         _render_height: u32,
+        // Added views just to match signature if needed, but they are used in execute
+        _color_texture_view: &wgpu::TextureView,
+        _data_texture_view: &wgpu::TextureView,
+        _sampler: &wgpu::Sampler,
     ) -> Self {
         let shader = ctx
             .device
@@ -248,9 +252,20 @@ impl RestirSpatialPass {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
-                    // 1: Textures
+                    // 1: Color Textures
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2Array,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    // 2: Data Textures
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Texture {
                             sample_type: wgpu::TextureSampleType::Float { filterable: true },
@@ -456,7 +471,8 @@ impl RestirSpatialPass {
         height: u32,
         frame_count: u32,
         light_count: u32,
-        texture_view: &wgpu::TextureView,
+        color_texture_view: &wgpu::TextureView,
+        data_texture_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
     ) {
         // Update Scene Info
@@ -481,7 +497,11 @@ impl RestirSpatialPass {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(texture_view),
+                    resource: wgpu::BindingResource::TextureView(color_texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(data_texture_view),
                 },
             ],
         });

@@ -16,7 +16,8 @@ pub struct SceneBuilder {
     pub instances: Vec<Option<wgpu::TlasInstance>>,
     pub blases: Vec<wgpu::Blas>,
     pub lights: Vec<LightUniform>,
-    pub textures: Vec<DynamicImage>, // Added
+    pub color_textures: Vec<DynamicImage>,
+    pub data_textures: Vec<DynamicImage>,
 }
 
 impl SceneBuilder {
@@ -29,7 +30,8 @@ impl SceneBuilder {
             instances: Vec::new(),
             blases: Vec::new(),
             lights: Vec::new(),
-            textures: Vec::new(),
+            color_textures: Vec::new(),
+            data_textures: Vec::new(),
         };
         // Add default textures
         builder.add_default_textures();
@@ -38,56 +40,77 @@ impl SceneBuilder {
 
     fn add_default_textures(&mut self) {
         use image::{ImageBuffer, Rgba};
-        // 0: White
-        let white = DynamicImage::ImageRgba32F(ImageBuffer::from_fn(
+
+        // --- Color Defaults (Rgba8 - sRGB) ---
+        // 0: White (Base Color Default)
+        // Note: sRGB(255,255,255) -> Linear(1.0, 1.0, 1.0)
+        let white = DynamicImage::ImageRgba8(ImageBuffer::from_fn(
             TEXTURE_WIDTH,
             TEXTURE_HEIGHT,
-            |_, _| Rgba([1.0, 1.0, 1.0, 1.0]),
+            |_, _| Rgba([255, 255, 255, 255]),
         ));
-        self.textures.push(white);
+        self.color_textures.push(white.clone()); // Color 0
 
         // 1: Checker
-        let checker = DynamicImage::ImageRgba32F(ImageBuffer::from_fn(
+        let checker = DynamicImage::ImageRgba8(ImageBuffer::from_fn(
             TEXTURE_WIDTH,
             TEXTURE_HEIGHT,
             |x, y| {
                 let check = ((x / 64) + (y / 64)) % 2 == 0;
                 if check {
-                    Rgba([1.0, 1.0, 1.0, 1.0])
+                    Rgba([255, 255, 255, 255])
                 } else {
-                    Rgba([0.0, 0.0, 0.0, 1.0])
+                    Rgba([0, 0, 0, 255])
                 }
             },
         ));
-        self.textures.push(checker);
+        self.color_textures.push(checker); // Color 1
 
-        // 2: Flat Normal (0.5, 0.5, 1.0)
-        // 128/255 approx 0.50196
-        let flat_normal = DynamicImage::ImageRgba32F(ImageBuffer::from_fn(
+        // 2: Black (Emissive Default)
+        let black = DynamicImage::ImageRgba8(ImageBuffer::from_fn(
             TEXTURE_WIDTH,
             TEXTURE_HEIGHT,
-            |_, _| Rgba([0.50196, 0.50196, 1.0, 1.0]),
+            |_, _| Rgba([0, 0, 0, 255]),
         ));
-        self.textures.push(flat_normal);
+        self.color_textures.push(black.clone()); // Color 2
 
-        // 3: Black (0.0, 0.0, 0.0)
-        let black = DynamicImage::ImageRgba32F(ImageBuffer::from_fn(
+        // --- Data Defaults (Rgba8Unorm - Linear) ---
+        // 0: White (Occlusion/Roughness/Metallic Default = 1.0)
+        self.data_textures.push(white); // Data 0
+
+        // 1: Flat Normal (0.5, 0.5, 1.0) -> (128, 128, 255)
+        let flat_normal = DynamicImage::ImageRgba8(ImageBuffer::from_fn(
             TEXTURE_WIDTH,
             TEXTURE_HEIGHT,
-            |_, _| Rgba([0.0, 0.0, 0.0, 1.0]),
+            |_, _| Rgba([128, 128, 255, 255]),
         ));
-        self.textures.push(black);
+        self.data_textures.push(flat_normal); // Data 1
+
+        // 2: Black (Generic Data Zero)
+        self.data_textures.push(black); // Data 2
     }
 
-    pub fn add_texture(&mut self, texture: DynamicImage) -> u32 {
-        let id = self.textures.len() as u32;
-        // Ensure RGBA32F
-        let rgba = if let DynamicImage::ImageRgba32F(_) = texture {
+    pub fn add_color_texture(&mut self, texture: DynamicImage) -> u32 {
+        let id = self.color_textures.len() as u32;
+        // Keep as Rgba8 (sRGB)
+        let rgba = if let DynamicImage::ImageRgba8(_) = texture {
             texture
         } else {
-            DynamicImage::ImageRgba32F(texture.to_rgba32f())
+            DynamicImage::ImageRgba8(texture.to_rgba8())
         };
-        self.textures.push(rgba);
+        self.color_textures.push(rgba);
+        id
+    }
+
+    pub fn add_data_texture(&mut self, texture: DynamicImage) -> u32 {
+        let id = self.data_textures.len() as u32;
+        // Keep as Rgba8Unorm (no linearization)
+        let rgba = if let DynamicImage::ImageRgba8(_) = texture {
+            texture
+        } else {
+            DynamicImage::ImageRgba8(texture.to_rgba8())
+        };
+        self.data_textures.push(rgba);
         id
     }
 
@@ -170,53 +193,86 @@ impl SceneBuilder {
         materials: Vec<Material>,
         images: Vec<DynamicImage>,
     ) -> Vec<u32> {
-        // Load textures into builder and get the base ID offset
-        let base_tex_id = self.textures.len() as u32;
-
-        for img in images {
-            self.add_texture(img);
-        }
+        let mut color_map = vec![None; images.len()];
+        let mut data_map = vec![None; images.len()];
 
         let mut gltf_mat_ids = Vec::new();
+
         for mut mat in materials {
-            // Update material texture indices and add to list
-            // Base Color
+            // --- Base Color (Color Array) ---
             let tex_id = mat.tex_id();
-            if tex_id == 0xFFFF {
-                mat = mat.texture(0); // Default White
-            } else {
-                mat = mat.texture(tex_id + base_tex_id);
+            if tex_id != 0xFFFF {
+                let img_idx = tex_id as usize;
+                let new_id = if let Some(id) = color_map[img_idx] {
+                    id
+                } else {
+                    let id = self.add_color_texture(images[img_idx].clone());
+                    color_map[img_idx] = Some(id);
+                    id
+                };
+                mat = mat.texture(new_id);
             }
+            // ELSE: Leave as 0xFFFF (Texture None)
 
-            // Normal
+            // --- Normal (Data Array) ---
             let normal_tex_id = mat.normal_tex_id();
-            if normal_tex_id == 0xFFFF {
-                mat = mat.normal_texture(2); // Default Flat Normal
-            } else {
-                mat = mat.normal_texture(normal_tex_id + base_tex_id);
+            if normal_tex_id != 0xFFFF {
+                let img_idx = normal_tex_id as usize;
+                let new_id = if let Some(id) = data_map[img_idx] {
+                    id
+                } else {
+                    let id = self.add_data_texture(images[img_idx].clone());
+                    data_map[img_idx] = Some(id);
+                    id
+                };
+                mat = mat.normal_texture(new_id);
             }
+            // ELSE: Leave as 0xFFFF
 
-            // Occlusion
+            // --- Occlusion (Data Array) ---
             let occlusion_tex_id = mat.occlusion_tex_id();
-            if occlusion_tex_id == 0xFFFF {
-                mat = mat.occlusion_texture(0); // Default White (No occlusion)
-            } else {
-                mat = mat.occlusion_texture(occlusion_tex_id + base_tex_id);
+            if occlusion_tex_id != 0xFFFF {
+                let img_idx = occlusion_tex_id as usize;
+                let new_id = if let Some(id) = data_map[img_idx] {
+                    id
+                } else {
+                    let id = self.add_data_texture(images[img_idx].clone());
+                    data_map[img_idx] = Some(id);
+                    id
+                };
+                mat = mat.occlusion_texture(new_id);
             }
+            // ELSE: Leave as 0xFFFF
 
-            // Emissive
+            // --- Emissive (Color Array) ---
             let emissive_tex_id = mat.emissive_tex_id();
-            if emissive_tex_id == 0xFFFF {
-                mat = mat.emissive_texture(3); // Default Black (No emission)
-            } else {
-                mat = mat.emissive_texture(emissive_tex_id + base_tex_id);
+            if emissive_tex_id != 0xFFFF {
+                let img_idx = emissive_tex_id as usize;
+                let new_id = if let Some(id) = color_map[img_idx] {
+                    id
+                } else {
+                    let id = self.add_color_texture(images[img_idx].clone());
+                    color_map[img_idx] = Some(id);
+                    id
+                };
+                mat = mat.emissive_texture(new_id);
             }
+            // ELSE: Leave as 0xFFFF
 
-            // Metallic Roughness
+            // --- Metallic Roughness (Data Array) ---
             let mr_tex_id = mat.metallic_roughness_tex_id();
             if mr_tex_id != 0xFFFF {
-                mat = mat.metallic_roughness_texture(mr_tex_id + base_tex_id);
+                let img_idx = mr_tex_id as usize;
+                let new_id = if let Some(id) = data_map[img_idx] {
+                    id
+                } else {
+                    let id = self.add_data_texture(images[img_idx].clone());
+                    data_map[img_idx] = Some(id);
+                    id
+                };
+                mat = mat.metallic_roughness_texture(new_id);
             }
+            // ELSE: Leave as 0xFFFF
 
             gltf_mat_ids.push(self.add_material(mat));
         }
@@ -276,7 +332,9 @@ impl SceneBuilder {
             Material::new([1.0, 1.0, 1.0, 1.0])
                 .light_index(self.lights.len() as i32)
                 .emissive_factor(emission_factor)
-                .texture(0), // Default White
+                .texture(0), // Default White (Color 0) - or should be No Texture?
+                             // Actually light geometry usually is just emission, so White Texture OR No Texture is fine.
+                             // Let's keep it using 0 (Color Default White) for now as lights are special.
         );
 
         // 3. Add Instance
@@ -416,29 +474,27 @@ impl SceneBuilder {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
-        // --- Texture Array Building ---
-        // Change from Rgba8Unorm to Rgba32Float
-        let texture_size = wgpu::Extent3d {
+        // --- Color Texture Array (Rgba8UnormSrgb) ---
+        let color_texture_size = wgpu::Extent3d {
             width: TEXTURE_WIDTH,
             height: TEXTURE_HEIGHT,
-            depth_or_array_layers: self.textures.len() as u32,
+            depth_or_array_layers: self.color_textures.len() as u32,
         };
-        let texture_array = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Scene Texture Array"),
-            size: texture_size,
+        let color_texture_array = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Scene Color Texture Array"),
+            size: color_texture_size,
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba32Float,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb, // Uses sRGB
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
 
-        for (i, img) in self.textures.iter().enumerate() {
-            // Note: Rgba32Float uses f32 per component, so 16 bytes per pixel.
+        for (i, img) in self.color_textures.iter().enumerate() {
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
-                    texture: &texture_array,
+                    texture: &color_texture_array,
                     mip_level: 0,
                     origin: wgpu::Origin3d {
                         x: 0,
@@ -450,7 +506,7 @@ impl SceneBuilder {
                 img.as_bytes(),
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(TEXTURE_WIDTH * 16), // 4 bytes * 4 components = 16
+                    bytes_per_row: Some(TEXTURE_WIDTH * 4), // 4 bytes per pixel (RGBA8)
                     rows_per_image: Some(TEXTURE_HEIGHT),
                 },
                 wgpu::Extent3d {
@@ -461,10 +517,60 @@ impl SceneBuilder {
             );
         }
 
-        let texture_view = texture_array.create_view(&wgpu::TextureViewDescriptor {
-            label: Some("Scene Texture Array View"),
+        let color_texture_view = color_texture_array.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("Scene Color Texture Array View"),
             dimension: Some(wgpu::TextureViewDimension::D2Array),
-            array_layer_count: Some(self.textures.len() as u32),
+            array_layer_count: Some(self.color_textures.len() as u32),
+            ..Default::default()
+        });
+
+        // --- Data Texture Array (Rgba8Unorm) ---
+        let data_texture_size = wgpu::Extent3d {
+            width: TEXTURE_WIDTH,
+            height: TEXTURE_HEIGHT,
+            depth_or_array_layers: self.data_textures.len() as u32,
+        };
+        let data_texture_array = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Scene Data Texture Array"),
+            size: data_texture_size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm, // Linear linear
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        for (i, img) in self.data_textures.iter().enumerate() {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &data_texture_array,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: 0,
+                        y: 0,
+                        z: i as u32,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                img.as_bytes(),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(TEXTURE_WIDTH * 4), // 4 bytes per pixel (RGBA8)
+                    rows_per_image: Some(TEXTURE_HEIGHT),
+                },
+                wgpu::Extent3d {
+                    width: TEXTURE_WIDTH,
+                    height: TEXTURE_HEIGHT,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+
+        let data_texture_view = data_texture_array.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("Scene Data Texture Array View"),
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            array_layer_count: Some(self.data_textures.len() as u32),
             ..Default::default()
         });
 
@@ -477,7 +583,8 @@ impl SceneBuilder {
             material_buffer,
             light_buffer,
             num_lights: self.lights.len() as u32,
-            texture_view,
+            color_texture_view,
+            data_texture_view,
         }
     }
 }

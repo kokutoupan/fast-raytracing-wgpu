@@ -84,7 +84,8 @@ struct MeshInfo {
 
 // Group 1: Textures
 @group(1) @binding(0) var tex_sampler: sampler;
-@group(1) @binding(1) var textures: texture_2d_array<f32>;
+@group(1) @binding(1) var color_textures: texture_2d_array<f32>;
+@group(1) @binding(2) var data_textures: texture_2d_array<f32>;
 
 
 @compute @workgroup_size(8, 8)
@@ -173,30 +174,30 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let tex_uv = v0.uv.xy * w_bary + v1.uv.xy * u_bary + v2.uv.xy * v_bary;
 
     // --- Texture Sampling ---
-    // 1. Base Color
+    // 1. Base Color (tex_info_0.low) -> Color Array
     var tex_color = vec4f(1.0);
     let tex_ids_0 = unpack_u16(mat.tex_info_0);
     let tex_id = tex_ids_0.x;
     
     if tex_id != 65535u {
-        tex_color = textureSampleLevel(textures, tex_sampler, tex_uv, i32(tex_id), 0.0);
+        tex_color = textureSampleLevel(color_textures, tex_sampler, tex_uv, i32(tex_id), 0.0);
     }
 
-    // 2. Occlusion
+    // 2. Occlusion (tex_info_1.low) -> Data Array
     var occlusion = 1.0;
     let tex_ids_1 = unpack_u16(mat.tex_info_1);
     let occlusion_tex_id = tex_ids_1.x;
     
     if occlusion_tex_id != 65535u {
-        occlusion = textureSampleLevel(textures, tex_sampler, tex_uv, i32(occlusion_tex_id), 0.0).r;
+        occlusion = textureSampleLevel(data_textures, tex_sampler, tex_uv, i32(occlusion_tex_id), 0.0).r;
     }
 
-    // 4. Normal Map
+    // 4. Normal Map (tex_info_0.high) -> Data Array
     var normal_local = vec3f(0.0, 0.0, 1.0);
     let normal_tex_id = tex_ids_0.y;
     
     if normal_tex_id != 65535u {
-        let normal_map = textureSampleLevel(textures, tex_sampler, tex_uv, i32(normal_tex_id), 0.0).rgb;
+        let normal_map = textureSampleLevel(data_textures, tex_sampler, tex_uv, i32(normal_tex_id), 0.0).rgb;
         normal_local = normalize(normal_map * 2.0 - 1.0);
     }
     

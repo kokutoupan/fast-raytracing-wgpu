@@ -39,52 +39,53 @@ impl SceneBuilder {
     fn add_default_textures(&mut self) {
         use image::{ImageBuffer, Rgba};
         // 0: White
-        let white = DynamicImage::ImageRgba8(ImageBuffer::from_fn(
+        let white = DynamicImage::ImageRgba32F(ImageBuffer::from_fn(
             TEXTURE_WIDTH,
             TEXTURE_HEIGHT,
-            |_, _| Rgba([255, 255, 255, 255]),
+            |_, _| Rgba([1.0, 1.0, 1.0, 1.0]),
         ));
         self.textures.push(white);
 
         // 1: Checker
-        let checker = DynamicImage::ImageRgba8(ImageBuffer::from_fn(
+        let checker = DynamicImage::ImageRgba32F(ImageBuffer::from_fn(
             TEXTURE_WIDTH,
             TEXTURE_HEIGHT,
             |x, y| {
                 let check = ((x / 64) + (y / 64)) % 2 == 0;
                 if check {
-                    Rgba([255, 255, 255, 255])
+                    Rgba([1.0, 1.0, 1.0, 1.0])
                 } else {
-                    Rgba([0, 0, 0, 255])
+                    Rgba([0.0, 0.0, 0.0, 1.0])
                 }
             },
         ));
         self.textures.push(checker);
 
-        // 2: Flat Normal (128, 128, 255)
-        let flat_normal = DynamicImage::ImageRgba8(ImageBuffer::from_fn(
+        // 2: Flat Normal (0.5, 0.5, 1.0)
+        // 128/255 approx 0.50196
+        let flat_normal = DynamicImage::ImageRgba32F(ImageBuffer::from_fn(
             TEXTURE_WIDTH,
             TEXTURE_HEIGHT,
-            |_, _| Rgba([128, 128, 255, 255]),
+            |_, _| Rgba([0.50196, 0.50196, 1.0, 1.0]),
         ));
         self.textures.push(flat_normal);
 
-        // 3: Black (0, 0, 0) - For Zero Emissive / Zero Roughness etc.
-        let black = DynamicImage::ImageRgba8(ImageBuffer::from_fn(
+        // 3: Black (0.0, 0.0, 0.0)
+        let black = DynamicImage::ImageRgba32F(ImageBuffer::from_fn(
             TEXTURE_WIDTH,
             TEXTURE_HEIGHT,
-            |_, _| Rgba([0, 0, 0, 255]),
+            |_, _| Rgba([0.0, 0.0, 0.0, 1.0]),
         ));
         self.textures.push(black);
     }
 
     pub fn add_texture(&mut self, texture: DynamicImage) -> u32 {
         let id = self.textures.len() as u32;
-        // Ensure RGBA8
-        let rgba = if texture.color() != image::ColorType::Rgba8 {
-            DynamicImage::ImageRgba8(texture.to_rgba8())
-        } else {
+        // Ensure RGBA32F
+        let rgba = if let DynamicImage::ImageRgba32F(_) = texture {
             texture
+        } else {
+            DynamicImage::ImageRgba32F(texture.to_rgba32f())
         };
         self.textures.push(rgba);
         id
@@ -416,6 +417,7 @@ impl SceneBuilder {
         });
 
         // --- Texture Array Building ---
+        // Change from Rgba8Unorm to Rgba32Float
         let texture_size = wgpu::Extent3d {
             width: TEXTURE_WIDTH,
             height: TEXTURE_HEIGHT,
@@ -427,12 +429,13 @@ impl SceneBuilder {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format: wgpu::TextureFormat::Rgba32Float,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
 
         for (i, img) in self.textures.iter().enumerate() {
+            // Note: Rgba32Float uses f32 per component, so 16 bytes per pixel.
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &texture_array,
@@ -447,7 +450,7 @@ impl SceneBuilder {
                 img.as_bytes(),
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(TEXTURE_WIDTH * 4),
+                    bytes_per_row: Some(TEXTURE_WIDTH * 16), // 4 bytes * 4 components = 16
                     rows_per_image: Some(TEXTURE_HEIGHT),
                 },
                 wgpu::Extent3d {

@@ -579,7 +579,7 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
 
     let is_glass = (mat.transmission > 0.01);
     let is_smooth_metal = (mat.metallic > 0.01) && (mat.roughness < 0.05);
-    let is_specular = is_glass || is_smooth_metal;
+    let is_specular = is_glass || (mat.roughness < 0.05);
     if !is_specular {
         if camera.num_lights > 0u {
             let light_idx = u32(rand() * f32(camera.num_lights));
@@ -727,8 +727,8 @@ fn trace_path(coord: vec2<i32>, seed: u32) -> PathResult {
         // 2. NEE (Standard Random Light)
         let is_glass_bounce = (mat.transmission > 0.01);
         let is_smooth_metal_bounce = (mat.metallic > 0.01) && (mat.roughness < 0.05);
-        let is_specular_bounce = is_glass_bounce || is_smooth_metal_bounce;
-        if !is_specular_bounce {
+let is_specular = is_glass || (mat.roughness < 0.05);
+        if !is_specular {
             if camera.num_lights > 0u {
                 let light_idx = u32(rand() * f32(camera.num_lights));
                 if light_idx < camera.num_lights {

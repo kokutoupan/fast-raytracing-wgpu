@@ -363,3 +363,142 @@ pub fn create_multi_material_model_scene(
             * Mat4::from_scale(Vec3::splat(1.0)),
     )
 }
+
+#[allow(dead_code)]
+pub fn create_chocolate_truffle_scene(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> SceneResources {
+    let mut builder = SceneBuilder::new();
+
+    // 1. 基本ジオメトリの生成
+    let plane_geo = geometry::create_plane_blas(device); // 床用
+    let light_geo = geometry::create_plane_blas(device); // ライト(Quad)用
+    let sphere_geo = geometry::create_sphere_blas(device, 4); // ライト(Sphere)用
+
+    // 2. GLTF読み込み
+    // 生成したモデルのファイルパス
+    let file_path = "assets/models/gift_wrapped_chocolate_3d_model.glb";
+
+    match loader::load_gltf(file_path, device) {
+        Ok((geos, mut mats, images, gltf_mat_indices)) => {
+            println!(
+                "Loaded Gift Chocolate: {} polys, {} materials",
+                geos.len(),
+                mats.len()
+            );
+
+            // ★ここでマテリアルを「よしなに」書き換える魔法
+            for mat in &mut mats {
+                // 色の明るさ(輝度)を計算
+                let r = mat.base_color[0];
+                let g = mat.base_color[1];
+                let b = mat.base_color[2];
+                let brightness = r * 0.299 + g * 0.587 + b * 0.114;
+
+                if brightness < 0.25 {
+                    // 暗い色 = たぶんチョコ本体
+                    // ヌルヌルの超光沢＆非金属に
+                    mat.roughness = 0.02;
+                    mat.metallic = 0.0;
+                } else {
+                    // 明るい色 = たぶんリボン
+                    // サテン生地のような、少し落ち着いた高級な光沢に
+                    mat.roughness = 0.25;
+                    // もし金色のリボンならメタリックにするという小技も可
+                    // mat.metallic = if r > 0.8 && g > 0.6 && b < 0.4 { 1.0 } else { 0.0 };
+                }
+            }
+
+            // --- BLAS Build (まとめて) ---
+            let mut all_geos = vec![&plane_geo, &light_geo, &sphere_geo];
+            for geo in &geos {
+                all_geos.push(geo);
+            }
+            SceneBuilder::build_blases(device, queue, &all_geos);
+
+            // --- Mesh ID 登録 ---
+            let plane_id = builder.add_mesh(plane_geo);
+            let light_mesh_id = builder.add_mesh(light_geo);
+            let gltf_mesh_ids = builder.add_gltf_meshes(geos);
+            let sphere_id = builder.add_mesh(sphere_geo);
+
+            // --- Material 登録 ---
+
+            // A. 床のマテリアル (黒曜石のような高級テーブル)
+            let mat_dark_floor = builder.add_material(
+                Material::new([0.02, 0.02, 0.02, 1.0])
+                    .roughness(0.1)
+                    .metallic(0.8), // 映り込み強め
+            );
+
+            // B. GLTFのマテリアル (書き換え済み)
+            let gltf_mat_ids = builder.add_gltf_materials(mats, images);
+
+            // --- Instance 配置 ---
+
+            // 1. 床
+            builder.add_instance(
+                plane_id,
+                mat_dark_floor,
+                Mat4::from_translation(Vec3::new(0.0, -0.01, 0.0)) // 埋まらないように少し下
+                    * Mat4::from_scale(Vec3::splat(50.0)),
+                0x1,
+            );
+
+            // 2. チョコ本体 (GLTF)
+            // Tripoのモデルはサイズや向きがまちまちなので、
+            // ここで調整できるようにしています。
+            let model_scale = 4.0; // 小さければここを10.0とかに
+            let model_transform = Mat4::from_translation(Vec3::new(0.0, 0.7, 0.0))
+                * Mat4::from_rotation_y(0.5) // 映える角度に回転
+                * Mat4::from_scale(Vec3::splat(model_scale));
+
+            builder.add_gltf_instances(
+                &gltf_mesh_ids,
+                &gltf_mat_ids,
+                &gltf_mat_indices,
+                model_transform,
+            );
+
+            // --- Lighting (Radeon vs Godiva Theme) ---
+
+            // Light 1: Key Light (メインの美味しそうな光)
+            // 少し暖色系で右上から
+            builder.register_sphere_light(
+                sphere_id,
+                Mat4::from_translation(Vec3::new(8.0, 4.0, 2.0))
+                    * Mat4::from_scale(Vec3::splat(2.0)),
+                [1.0, 0.95, 0.8], // Warm White
+                80.0,             // 強度
+            );
+
+            // Light 2: Rim Light (Radeon Red)
+            // 左奥から強烈な赤。リボンのエッジとチョコの輪郭を際立たせる
+            builder.register_sphere_light(
+                sphere_id,
+                Mat4::from_translation(Vec3::new(-3.0, 2.0, -4.0)) // 左・奥
+                    * Mat4::from_scale(Vec3::splat(2.0)), // デカいエリアライト
+                [1.0, 0.05, 0.01], // Pure Red
+                40.0,              // 強め
+            );
+
+            // Light 3: Fill Light (補助光)
+            // 正面左からうっすらと。影を青白くして引き締める
+            builder.register_sphere_light(
+                sphere_id,
+                Mat4::from_translation(Vec3::new(-3.0, 1.0, 3.0))
+                    * Mat4::from_scale(Vec3::splat(1.0)),
+                [0.01, 0.05, 0.2], // Cool Blue
+                10.0,
+            );
+        }
+        Err(e) => {
+            eprintln!("Failed to load gift chocolate: {:?}", e);
+            // 失敗したらアボカドでも出しておきましょう
+            return create_avocado_scene(device, queue);
+        }
+    }
+
+    builder.build(device, queue)
+}

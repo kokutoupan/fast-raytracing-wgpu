@@ -87,7 +87,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
     // Bilateral Filter Parameters
     let sigma_spatial = 1.5;
-    let sigma_color = 0.4;
+    let sigma_color = 0.2;
     let sigma_normal = 0.1;
     let sigma_pos = 0.1;
     let kernel_radius = 2;
@@ -172,7 +172,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     m2 /= 9.0;
 
     let sigma = sqrt(max(vec3f(0.0), m2 - m1 * m1));
-    let gamma = 1.25; // Slightly deeper box
+    let gamma = 1.2; // Slightly deeper box
     let c_min = m1 - gamma * sigma;
     let c_max = m1 + gamma * sigma;
     let c_avg = m1; 
@@ -243,21 +243,27 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         let motion_px = structure_motion * vec2f(f32(params.width), f32(params.height));
         let speed = length(motion_px);
 
-        // If speed is low, we trust history more (High feedback).
-        // If speed is high, we trust current frame more (Low feedback).
-        // Base feedback: 0.90. Max feedback: 0.97 (or even 0.98 for very static).
-        var dynamic_feedback = mix(0.98, 0.85, smoothstep(0.0, 2.0, speed));
-        
-        // --- Relaxed Clipping for Static Scenes ---
-        // If motion is very low, the "Current Neighborhood" might be dominated by noise.
-        // The "Clamped History" will thus jitter.
-        // To stabilize, we allow some "Unclipped History" to bleed through if we are confident the pixel hasn't moved.
-        // Be careful: This causes ghosting if lighting changes rapidly on static objects.
-        // But for "Static Image Quality", it's a good tradeoff.
-        let static_factor = 1.0 - smoothstep(0.0, 0.5, speed);
-        let final_history_color = mix(clamped_history, history_color, static_factor * 0.2); // 20% relax max
+// ほぼ静止しているとみなす閾値 (0.1ピクセル以下など)
+        if speed < 0.5 {
+            // ★静止モード (Accumulation)
+            // クランプ(補正)を一切しない「生の過去ログ」を使う
+            let raw_history = history_color;
 
-        final_tm = mix(tm_filtered, final_history_color, dynamic_feedback);
+            // 1/N の重みで平均化する (frame_count がリセットされている前提)
+            // frame=0 -> blend=0.0 (新規100%)
+            // frame=1 -> blend=0.5 (平均)
+            // frame=99 -> blend=0.99
+            let accum_blend = 1.0 - (1.0 / f32(params.frame_count + 1u));
+            
+            // クランプなしでブレンド
+            final_tm = mix(tm_filtered, raw_history, clamp(accum_blend, 0.0, 1.0));
+
+        } else {
+            // ★移動モード (Standard TAA)
+            // 従来どおり、ゴースト抑制のためにクランプ済み履歴(clamped_history)を使う
+            var dynamic_feedback = mix(0.98, 0.85, smoothstep(0.0, 2.0, speed));
+            final_tm = mix(tm_filtered, clamped_history, dynamic_feedback);
+        }
     }
     
     // Inverse Tonemap to get back to Linear HDR

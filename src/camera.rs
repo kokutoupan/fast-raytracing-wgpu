@@ -199,8 +199,8 @@ impl CameraController {
         // Scale by pixel size to get NDC offset
         // NDC is [-1, 1], so pixel size is 2.0 / size
         (
-            (halton_x * 0.75) / width as f32,
-            (halton_y * 0.75) / height as f32,
+            (halton_x * 0.) / width as f32,
+            (halton_y * 0.) / height as f32,
         )
     }
 

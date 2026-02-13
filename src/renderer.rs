@@ -191,8 +191,9 @@ pub struct Renderer {
     pub post_params_buffer: wgpu::Buffer,
     pub blit_params_buffer: wgpu::Buffer,
     pub sampler: wgpu::Sampler,
-    // pub texture_array: wgpu::Texture, // Removed
-    pub texture_view: wgpu::TextureView,
+    // Texture Views
+    pub color_texture_view: wgpu::TextureView,
+    pub data_texture_view: wgpu::TextureView,
 
     pub frame_count: u32,
 }
@@ -247,14 +248,9 @@ impl Renderer {
             ..Default::default()
         });
 
-        // --- Texture Array ---
-        // Use texture view from scene resources
-        let texture_view = &scene_resources.texture_view;
-
-        /*
-        // --- Texture Array (0: White, 1: Checker) ---
-        // MOVED TO SCENE BUILDER
-         */
+        // --- Texture Arrays ---
+        let color_texture_view = &scene_resources.color_texture_view;
+        let data_texture_view = &scene_resources.data_texture_view;
 
         // --- Passes ---
         let gbuffer_pass = GBufferPass::new(
@@ -265,7 +261,8 @@ impl Renderer {
             &targets.gbuffer_normal_view,
             &targets.gbuffer_albedo_view,
             &targets.gbuffer_motion_view,
-            &texture_view,
+            color_texture_view,
+            data_texture_view,
             &sampler,
         );
 
@@ -279,6 +276,9 @@ impl Renderer {
             &targets.gbuffer_motion_view,
             render_width,
             render_height,
+            color_texture_view,
+            data_texture_view,
+            &sampler,
         );
 
         let restir_spatial_pass = RestirSpatialPass::new(
@@ -294,6 +294,9 @@ impl Renderer {
             &targets.raw_view,                 // Output (Color)
             render_width,
             render_height,
+            color_texture_view,
+            data_texture_view,
+            &sampler,
         );
 
         let post_pass = PostPass::new(
@@ -326,8 +329,8 @@ impl Renderer {
             post_params_buffer,
             blit_params_buffer,
             sampler,
-            // texture_array, // Removed
-            texture_view: texture_view.clone(),
+            color_texture_view: color_texture_view.clone(),
+            data_texture_view: data_texture_view.clone(),
             frame_count: 0,
         }
     }
@@ -416,7 +419,8 @@ impl Renderer {
                 self.render_height,
                 self.frame_count,
                 light_count,
-                &self.texture_view,
+                &self.color_texture_view,
+                &self.data_texture_view,
                 &self.sampler,
             );
 
@@ -429,7 +433,8 @@ impl Renderer {
                 self.render_height,
                 self.frame_count,
                 light_count,
-                &self.texture_view,
+                &self.color_texture_view,
+                &self.data_texture_view,
                 &self.sampler,
             );
 

@@ -44,7 +44,10 @@ pub fn load_gltf(
             }
         };
 
-        // Resize to TEXTURE_WIDTH x TEXTURE_HEIGHT for now (to fit in our simple texture array)
+        // Resize to TEXTURE_WIDTH x TEXTURE_HEIGHT using Lanczos3
+        // Note: Resizing in sRGB space is technically incorrect (gamma error),
+        // but convenient for maintaining Rgba8 storage.
+        // For "memory saving" requested by user, this is appropriate.
         let resized = img.resize_exact(
             TEXTURE_WIDTH,
             TEXTURE_HEIGHT,

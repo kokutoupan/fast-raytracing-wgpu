@@ -41,6 +41,12 @@ impl WgpuContext {
             panic!("This application requires hardware ray tracing support.");
         }
 
+        if features.contains(wgpu::Features::FLOAT32_FILTERABLE) {
+            println!("✅ Float32 Filtering is supported!");
+        } else {
+            println!("⚠️ Float32 Filtering is NOT supported. Fallback might be needed (or crash).");
+        }
+
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,

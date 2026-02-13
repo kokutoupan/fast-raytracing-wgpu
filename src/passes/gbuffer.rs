@@ -4,7 +4,6 @@ use crate::wgpu_ctx::WgpuContext;
 pub struct GBufferPass {
     pub pipeline: wgpu::ComputePipeline,
     pub bind_groups: [wgpu::BindGroup; 2],
-    // pub bind_group_layout: wgpu::BindGroupLayout, // Unused
     pub texture_bind_group: wgpu::BindGroup,
 }
 
@@ -18,14 +17,10 @@ impl GBufferPass {
         normal_views: &[wgpu::TextureView; 2],
         albedo_views: &[wgpu::TextureView; 2], // Double buffered
         motion_view: &wgpu::TextureView,
-        texture_array_view: &wgpu::TextureView,
+        color_texture_view: &wgpu::TextureView,
+        data_texture_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
     ) -> Self {
-        // ... (Layout creation is same, skipping to keep context concise, hoping replace works on the closure part) ...
-        // Wait, I need to output the WHOLE function if I change the signature and internal logic significantly.
-        // Or I can replace chunks.
-        // Let's replace the whole `new` function to be safe.
-
         let shader = ctx
             .device
             .create_shader_module(wgpu::include_wgsl!("../shaders/gbuffer.wgsl"));
@@ -160,6 +155,16 @@ impl GBufferPass {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2Array,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -262,7 +267,11 @@ impl GBufferPass {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(texture_array_view),
+                    resource: wgpu::BindingResource::TextureView(color_texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(data_texture_view),
                 },
             ],
         });

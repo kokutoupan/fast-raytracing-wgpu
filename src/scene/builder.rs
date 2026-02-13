@@ -2,6 +2,7 @@ use super::material::Material;
 use super::resources::{MeshInfo, SceneResources};
 use crate::geometry::{self, VertexAttributes};
 use crate::scene::light::LightUniform;
+use crate::scene::{TEXTURE_HEIGHT, TEXTURE_WIDTH};
 use glam::{Mat4, Vec3};
 use wgpu::util::DeviceExt;
 
@@ -38,31 +39,42 @@ impl SceneBuilder {
     fn add_default_textures(&mut self) {
         use image::{ImageBuffer, Rgba};
         // 0: White
-        let white = DynamicImage::ImageRgba8(ImageBuffer::from_fn(512, 512, |_, _| {
-            Rgba([255, 255, 255, 255])
-        }));
+        let white = DynamicImage::ImageRgba8(ImageBuffer::from_fn(
+            TEXTURE_WIDTH,
+            TEXTURE_HEIGHT,
+            |_, _| Rgba([255, 255, 255, 255]),
+        ));
         self.textures.push(white);
 
         // 1: Checker
-        let checker = DynamicImage::ImageRgba8(ImageBuffer::from_fn(512, 512, |x, y| {
-            let check = ((x / 64) + (y / 64)) % 2 == 0;
-            if check {
-                Rgba([255, 255, 255, 255])
-            } else {
-                Rgba([0, 0, 0, 255])
-            }
-        }));
+        let checker = DynamicImage::ImageRgba8(ImageBuffer::from_fn(
+            TEXTURE_WIDTH,
+            TEXTURE_HEIGHT,
+            |x, y| {
+                let check = ((x / 64) + (y / 64)) % 2 == 0;
+                if check {
+                    Rgba([255, 255, 255, 255])
+                } else {
+                    Rgba([0, 0, 0, 255])
+                }
+            },
+        ));
         self.textures.push(checker);
 
         // 2: Flat Normal (128, 128, 255)
-        let flat_normal = DynamicImage::ImageRgba8(ImageBuffer::from_fn(512, 512, |_, _| {
-            Rgba([128, 128, 255, 255])
-        }));
+        let flat_normal = DynamicImage::ImageRgba8(ImageBuffer::from_fn(
+            TEXTURE_WIDTH,
+            TEXTURE_HEIGHT,
+            |_, _| Rgba([128, 128, 255, 255]),
+        ));
         self.textures.push(flat_normal);
 
         // 3: Black (0, 0, 0) - For Zero Emissive / Zero Roughness etc.
-        let black =
-            DynamicImage::ImageRgba8(ImageBuffer::from_fn(512, 512, |_, _| Rgba([0, 0, 0, 255])));
+        let black = DynamicImage::ImageRgba8(ImageBuffer::from_fn(
+            TEXTURE_WIDTH,
+            TEXTURE_HEIGHT,
+            |_, _| Rgba([0, 0, 0, 255]),
+        ));
         self.textures.push(black);
     }
 
@@ -404,10 +416,9 @@ impl SceneBuilder {
         });
 
         // --- Texture Array Building ---
-        let tex_dim = 512;
         let texture_size = wgpu::Extent3d {
-            width: tex_dim,
-            height: tex_dim,
+            width: TEXTURE_WIDTH,
+            height: TEXTURE_HEIGHT,
             depth_or_array_layers: self.textures.len() as u32,
         };
         let texture_array = device.create_texture(&wgpu::TextureDescriptor {
@@ -436,12 +447,12 @@ impl SceneBuilder {
                 img.as_bytes(),
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(tex_dim * 4),
-                    rows_per_image: Some(tex_dim),
+                    bytes_per_row: Some(TEXTURE_WIDTH * 4),
+                    rows_per_image: Some(TEXTURE_HEIGHT),
                 },
                 wgpu::Extent3d {
-                    width: tex_dim,
-                    height: tex_dim,
+                    width: TEXTURE_WIDTH,
+                    height: TEXTURE_HEIGHT,
                     depth_or_array_layers: 1,
                 },
             );

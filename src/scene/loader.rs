@@ -1,5 +1,6 @@
 use crate::geometry::{self, Geometry, VertexAttributes};
 use crate::scene::Material;
+use crate::scene::{TEXTURE_HEIGHT, TEXTURE_WIDTH};
 use anyhow::Result;
 use gltf::mesh::util::ReadIndices;
 
@@ -35,14 +36,20 @@ pub fn load_gltf(
             _ => {
                 println!("Unsupported image format: {:?}", image.format);
                 // Return dummy white image
-                DynamicImage::ImageRgba8(ImageBuffer::from_fn(512, 512, |_, _| {
-                    Rgba([255, 255, 255, 255])
-                }))
+                DynamicImage::ImageRgba8(ImageBuffer::from_fn(
+                    TEXTURE_WIDTH,
+                    TEXTURE_HEIGHT,
+                    |_, _| Rgba([255, 255, 255, 255]),
+                ))
             }
         };
 
-        // Resize to 512x512 for now (to fit in our simple texture array)
-        let resized = img.resize_exact(512, 512, image::imageops::FilterType::Lanczos3);
+        // Resize to TEXTURE_WIDTH x TEXTURE_HEIGHT for now (to fit in our simple texture array)
+        let resized = img.resize_exact(
+            TEXTURE_WIDTH,
+            TEXTURE_HEIGHT,
+            image::imageops::FilterType::Lanczos3,
+        );
         loaded_images.push(resized);
     }
 
